@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Computers from "./pages/Computers";
+import Alerts from "./pages/Alerts";
 import Assets from "./pages/Assets";
 import ComputerDetail from "./pages/ComputerDetail";
 import Users from "./pages/Users";
@@ -25,6 +26,19 @@ function App() {
               <RoleProtectedRoute allowedRoles={["admin", "technician", "operator"]}>
                 <Layout>
                   <Dashboard />
+                </Layout>
+              </RoleProtectedRoute>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/alerts"
+          element={
+            <ProtectedRoute>
+              <RoleProtectedRoute allowedRoles={["admin", "technician"]}>
+                <Layout>
+                  <Alerts />
                 </Layout>
               </RoleProtectedRoute>
             </ProtectedRoute>

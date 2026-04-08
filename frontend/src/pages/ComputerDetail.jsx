@@ -1,29 +1,56 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+
 import api from "../api/api";
+import MetricSparkline from "../components/MetricSparkline";
+import { useUI } from "../components/UIProvider";
+import useAutoRefresh from "../hooks/useAutoRefresh";
+import { classifyHostSeverity, severityClassName, severityLabel } from "../utils/hostSeverity";
 
 function ComputerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-
   const [computer, setComputer] = useState(null);
   const [assets, setAssets] = useState([]);
+  const [metrics, setMetrics] = useState([]);
+  const [events, setEvents] = useState([]);
+  const { notify } = useUI();
 
-  useEffect(() => {
-    api.get(`/computers/${id}`)
+  const loadComputerDetails = useCallback(() => {
+    api
+      .get(`/computers/${id}`)
       .then((response) => setComputer(response.data))
       .catch((error) => {
         console.error(error);
-        alert("Erro ao carregar detalhes do computador");
+        notify("Erro ao carregar detalhes do computador", "error");
       });
 
-    api.get(`/computers/${id}/assets`)
+    api
+      .get(`/computers/${id}/assets`)
       .then((response) => setAssets(response.data))
       .catch((error) => {
         console.error(error);
-        alert("Erro ao carregar assets do computador");
+        notify("Erro ao carregar ativos do computador", "error");
       });
-  }, [id]);
+
+    api
+      .get(`/computers/${id}/metrics?limit=24`)
+      .then((response) => setMetrics(response.data))
+      .catch((error) => {
+        console.error(error);
+        notify("Erro ao carregar histórico de métricas", "error");
+      });
+
+    api
+      .get(`/computers/${id}/events?limit=12`)
+      .then((response) => setEvents(response.data))
+      .catch((error) => {
+        console.error(error);
+        notify("Erro ao carregar eventos operacionais", "error");
+      });
+  }, [id, notify]);
+
+  useAutoRefresh(loadComputerDetails);
 
   const formatDateTime = (value) => {
     if (!value) return "-";
@@ -34,16 +61,55 @@ function ComputerDetail() {
     });
   };
 
-  const isOnlineRecently = useMemo(() => {
-    if (!computer?.last_seen) return false;
+  const hostSeverity = useMemo(() => classifyHostSeverity(computer), [computer]);
 
-    const lastSeen = new Date(computer.last_seen);
-    const now = new Date();
-    const diffMs = now - lastSeen;
-    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+  const infoCards = useMemo(() => {
+    if (!computer) {
+      return [];
+    }
 
-    return diffDays <= 7;
+    return [
+      ["Usuário", computer.user || "-"],
+      ["IP", computer.ip_address || "-"],
+      ["MAC", computer.mac_address || "-"],
+      ["CPU", computer.cpu || "-"],
+      ["Uso atual de CPU", computer.cpu_usage_percent != null ? `${computer.cpu_usage_percent}%` : "-"],
+      ["RAM", computer.ram || "-"],
+      ["Uso atual de memória", computer.memory_usage_percent != null ? `${computer.memory_usage_percent}%` : "-"],
+      ["Tipo de memória", computer.memory_type || "-"],
+      ["Frequência da memória", computer.memory_speed || "-"],
+      ["Disco", computer.disk || "-"],
+      ["Disco livre", computer.disk_free_gb != null ? `${computer.disk_free_gb} GB (${computer.disk_free_percent ?? 0}%)` : "-"],
+      ["Sistema", computer.os || "-"],
+      ["Fabricante", computer.manufacturer || "-"],
+      ["Modelo", computer.model || "-"],
+      ["Serial Number", computer.serial_number || "-"],
+      ["Patrimonio", computer.patrimony_number || "-"],
+      ["Uptime", computer.uptime_hours != null ? `${computer.uptime_hours} h` : "-"],
+      ["Último contato", formatDateTime(computer.last_seen)],
+    ];
   }, [computer]);
+
+  const metricCards = useMemo(() => ([
+    {
+      title: "CPU",
+      value: computer?.cpu_usage_percent != null ? `${computer.cpu_usage_percent}%` : "-",
+      values: metrics.map((metric) => metric.cpu_usage_percent).filter((value) => value != null),
+      tone: "#0f766e",
+    },
+    {
+      title: "Memória",
+      value: computer?.memory_usage_percent != null ? `${computer.memory_usage_percent}%` : "-",
+      values: metrics.map((metric) => metric.memory_usage_percent).filter((value) => value != null),
+      tone: "#d97706",
+    },
+    {
+      title: "Disco livre",
+      value: computer?.disk_free_percent != null ? `${computer.disk_free_percent}%` : "-",
+      values: metrics.map((metric) => metric.disk_free_percent).filter((value) => value != null),
+      tone: "#2563eb",
+    },
+  ]), [computer, metrics]);
 
   if (!computer) {
     return <p className="p-6 text-slate-600">Carregando detalhes...</p>;
@@ -51,130 +117,184 @@ function ComputerDetail() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="text-3xl font-bold text-slate-800">
-            {computer.hostname}
-          </h2>
-          <p className="text-slate-500">Detalhes do computador</p>
+      <section className="section-card overflow-hidden">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Ficha do equipamento
+            </p>
+            <h2 className="page-title mt-3 text-3xl md:text-[2.8rem]">{computer.hostname}</h2>
+            <p className="page-subtitle">
+              Dados consolidados enviados pelo agente e complementados pelo inventario interno.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={severityClassName(hostSeverity)}>
+              {severityLabel(hostSeverity)}
+            </span>
+
+            <button onClick={() => navigate("/computers")} className="btn-secondary">
+              Voltar para lista
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span
-            className={`rounded-full px-3 py-1 text-sm font-medium ${
-              isOnlineRecently
-                ? "bg-green-100 text-green-700"
-                : "bg-red-100 text-red-700"
-            }`}
-          >
-            {isOnlineRecently ? "Online recente" : "Offline"}
-          </span>
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          <div className="rounded-[24px] border border-emerald-200 bg-emerald-50 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+              Identidade
+            </p>
+            <p className="mt-3 text-lg font-semibold text-emerald-900">{computer.hostname}</p>
+            <p className="mt-1 text-sm text-emerald-800/80">{computer.user || "Sem usuário identificado"}</p>
+          </div>
 
-          <button
-            onClick={() => navigate("/computers")}
-            className="rounded-lg bg-slate-200 px-4 py-2 text-slate-800 hover:bg-slate-300"
-          >
-            Voltar
-          </button>
+          <div className="rounded-[24px] border border-slate-200 bg-white/85 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Setor</p>
+            <p className="mt-3 text-lg font-semibold text-slate-900">{computer.sector || "-"}</p>
+            <p className="mt-1 text-sm text-slate-500">{computer.equipment_status || "Sem status"}</p>
+          </div>
+
+          <div className="rounded-[24px] border border-amber-200 bg-amber-50 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+              Ativos vinculados
+            </p>
+            <p className="mt-3 text-lg font-semibold text-amber-900">{assets.length}</p>
+            <p className="mt-1 text-sm text-amber-800/80">Itens associados a esta máquina</p>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Usuário</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.user || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">IP</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.ip_address || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">MAC</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.mac_address || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">CPU</p>
-          <h3 className="mt-2 text-xl font-semibold break-words">{computer.cpu || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">RAM</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.ram || "-"}</h3>
+      <section className="section-card">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Telemetria recente
+            </p>
+            <h3 className="mt-2 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
+              Últimas amostras do agente
+            </h3>
+          </div>
+          <p className="text-sm text-slate-500">
+            Visualize tendência de CPU, memória e espaço livre sem sair da ficha técnica.
+          </p>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Disco</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.disk || "-"}</h3>
+        <div className="mt-6 grid gap-4 lg:grid-cols-3">
+          {metricCards.map((metric) => (
+            <div key={metric.title} className="rounded-[24px] border border-slate-200 bg-white/85 p-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                {metric.title}
+              </p>
+              <p className="mt-3 text-3xl font-semibold text-slate-900">{metric.value}</p>
+              <div className="mt-4">
+                <MetricSparkline values={metric.values} stroke={metric.tone} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section-card">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Eventos do host
+            </p>
+            <h3 className="mt-2 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
+              Linha do tempo operacional
+            </h3>
+          </div>
+          <p className="text-sm text-slate-500">
+            Veja quando o agente sincronizou e quando a severidade mudou.
+          </p>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Sistema</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.os || "-"}</h3>
+        <div className="mt-6 grid gap-4">
+          {events.length ? events.map((event) => (
+            <div key={event.id} className="rounded-[24px] border border-slate-200 bg-white/85 p-5">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <p className="text-base font-semibold text-slate-900">{event.title}</p>
+                    <span className={
+                      event.severity === "critical"
+                        ? "status-critical"
+                        : event.severity === "warning"
+                          ? "status-warning"
+                          : event.severity === "offline"
+                            ? "status-offline"
+                            : "status-neutral"
+                    }>
+                      {event.severity === "critical"
+                        ? "Crítico"
+                        : event.severity === "warning"
+                          ? "Atenção"
+                          : event.severity === "offline"
+                            ? "Offline"
+                            : "Info"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{event.message}</p>
+                </div>
+                <p className="text-sm text-slate-500">{formatDateTime(event.created_at)}</p>
+              </div>
+            </div>
+          )) : (
+            <div className="rounded-[24px] border border-slate-200 bg-white/85 p-5 text-sm text-slate-500">
+              Nenhum evento operacional registrado ainda.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {infoCards.map(([label, value]) => (
+          <div key={label} className="metric-card">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+            <h3 className="mt-3 break-words text-lg font-semibold text-slate-900">{value}</h3>
+          </div>
+        ))}
+      </section>
+
+      <section className="section-card">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Relacao de ativos
+            </p>
+            <h3 className="mt-2 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
+              Itens vinculados
+            </h3>
+          </div>
+          <p className="text-sm text-slate-500">
+            Utilize esta seção para validar periféricos e rastreabilidade da estação.
+          </p>
         </div>
 
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Fabricante</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.manufacturer || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Modelo</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.model || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Serial Number</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.serial_number || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Patrimônio</p>
-          <h3 className="mt-2 text-xl font-semibold">{computer.patrimony_number || "-"}</h3>
-        </div>
-
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Último contato</p>
-          <h3 className="mt-2 text-xl font-semibold">
-            {formatDateTime(computer.last_seen)}
-          </h3>
-        </div>
-      </div>
-
-      <div className="rounded-2xl bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-2xl font-bold text-slate-800">Assets vinculados</h3>
-
-        {assets.length === 0 ? (
-          <p className="text-slate-500">Nenhum asset vinculado.</p>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-slate-200">
-            <table className="min-w-full">
-              <thead className="bg-slate-100">
+        <div className="mt-6 table-shell">
+          {assets.length === 0 ? (
+            <div className="px-4 py-10 text-center text-slate-500">Nenhum ativo vinculado.</div>
+          ) : (
+            <table>
+              <thead>
                 <tr>
-                  <th className="px-4 py-3 text-left">Tipo</th>
-                  <th className="px-4 py-3 text-left">Patrimônio</th>
-                  <th className="px-4 py-3 text-left">Fabricante</th>
-                  <th className="px-4 py-3 text-left">Modelo</th>
-                  <th className="px-4 py-3 text-left">Status</th>
+                  <th>Tipo</th>
+                  <th>Patrimonio</th>
+                  <th>Fabricante</th>
+                  <th>Modelo</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {assets.map((asset) => (
-                  <tr key={asset.id} className="border-t border-slate-200">
-                    <td className="px-4 py-3">{asset.asset_type}</td>
-                    <td className="px-4 py-3">{asset.patrimony_number || "-"}</td>
-                    <td className="px-4 py-3">{asset.manufacturer || "-"}</td>
-                    <td className="px-4 py-3">{asset.model || "-"}</td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`rounded-full px-3 py-1 text-sm font-medium ${
-                          asset.asset_status === "Ativo"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-slate-200 text-slate-700"
-                        }`}
-                      >
+                  <tr key={asset.id}>
+                    <td>{asset.asset_type}</td>
+                    <td>{asset.patrimony_number || "-"}</td>
+                    <td>{asset.manufacturer || "-"}</td>
+                    <td>{asset.model || "-"}</td>
+                    <td>
+                      <span className={asset.asset_status === "Ativo" ? "status-online" : "status-neutral"}>
                         {asset.asset_status || "-"}
                       </span>
                     </td>
@@ -182,9 +302,9 @@ function ComputerDetail() {
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

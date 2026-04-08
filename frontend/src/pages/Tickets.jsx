@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import api from "../api/api";
+import TableControls from "../components/TableControls";
+import { useUI } from "../components/UIProvider";
+import useAutoRefresh from "../hooks/useAutoRefresh";
+import useDataTable from "../hooks/useDataTable";
 
 const initialForm = {
   title: "",
@@ -9,6 +14,7 @@ const initialForm = {
   status: "Aberto",
   assigned_to_id: "",
   computer_id: "",
+  sector: "",
 };
 
 function Tickets() {
@@ -17,13 +23,23 @@ function Tickets() {
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
-
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
 
   const navigate = useNavigate();
   const currentUser = JSON.parse(localStorage.getItem("user"));
+  const { notify, confirm } = useUI();
+
+  const upsertTicket = useCallback((ticketData) => {
+    setTickets((current) => {
+      const exists = current.some((item) => item.id === ticketData.id);
+      if (exists) {
+        return current.map((item) => (item.id === ticketData.id ? ticketData : item));
+      }
+      return [ticketData, ...current];
+    });
+  }, []);
 
   const handleAuthError = (error, defaultMessage) => {
     console.error(error);
@@ -35,35 +51,40 @@ function Tickets() {
       return;
     }
 
-    alert(defaultMessage);
+    notify(defaultMessage, "error");
   };
 
-  const loadTickets = () => {
-    api.get("/tickets")
+  const loadTickets = useCallback(() => {
+    api
+      .get("/tickets")
       .then((response) => setTickets(response.data))
       .catch((error) => handleAuthError(error, "Erro ao carregar chamados"));
-  };
+  }, [navigate, notify]);
 
-  const loadComputers = () => {
-    api.get("/computers")
+  const loadComputers = useCallback(() => {
+    api
+      .get("/computers")
       .then((response) => setComputers(response.data))
       .catch(() => {});
-  };
+  }, []);
 
-  const loadUsers = () => {
-    api.get("/users")
+  const loadUsers = useCallback(() => {
+    api
+      .get("/users")
       .then((response) => setUsers(response.data))
       .catch(() => {});
-  };
+  }, []);
 
-  useEffect(() => {
+  const refreshPage = useCallback(() => {
     loadTickets();
     loadComputers();
 
     if (currentUser?.role === "admin") {
       loadUsers();
     }
-  }, []);
+  }, [currentUser?.role, loadComputers, loadTickets, loadUsers]);
+
+  useAutoRefresh(refreshPage);
 
   const filteredTickets = useMemo(() => {
     return tickets.filter((ticket) => {
@@ -71,7 +92,9 @@ function Tickets() {
 
       const matchesSearch =
         ticket.title?.toLowerCase().includes(searchText) ||
-        ticket.description?.toLowerCase().includes(searchText);
+        ticket.description?.toLowerCase().includes(searchText) ||
+        ticket.requester_name?.toLowerCase().includes(searchText) ||
+        ticket.computer_hostname?.toLowerCase().includes(searchText);
 
       const matchesStatus = !statusFilter || ticket.status === statusFilter;
       const matchesPriority = !priorityFilter || ticket.priority === priorityFilter;
@@ -83,10 +106,21 @@ function Tickets() {
   const handleChange = (e) => {
     const { name, value } = e.target;
 
-    setForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setForm((prev) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if (name === "computer_id") {
+        const selectedComputer = computers.find((computer) => computer.id === Number(value));
+        if (selectedComputer) {
+          next.sector = selectedComputer.sector || prev.sector;
+        }
+      }
+
+      return next;
+    });
   };
 
   const resetForm = () => {
@@ -105,24 +139,25 @@ function Tickets() {
 
     try {
       if (editingId) {
-        await api.put(`/tickets/${editingId}`, payload);
-        alert("Chamado atualizado com sucesso!");
+        const response = await api.put(`/tickets/${editingId}`, payload);
+        upsertTicket(response.data);
+        notify("Chamado atualizado com sucesso!", "success");
       } else {
-        await api.post("/tickets", {
+        const response = await api.post("/tickets", {
           title: payload.title,
           description: payload.description,
           priority: payload.priority,
           assigned_to_id: payload.assigned_to_id,
           computer_id: payload.computer_id,
         });
-        alert("Chamado criado com sucesso!");
+        upsertTicket(response.data);
+        notify("Chamado criado com sucesso!", "success");
       }
 
       resetForm();
-      loadTickets();
     } catch (error) {
       console.error(error);
-      alert(error.response?.data?.detail || "Erro ao salvar chamado");
+      notify(error.response?.data?.detail || "Erro ao salvar chamado", "error");
     }
   };
 
@@ -135,172 +170,204 @@ function Tickets() {
       status: ticket.status ?? "Aberto",
       assigned_to_id: ticket.assigned_to_id ?? "",
       computer_id: ticket.computer_id ?? "",
+      sector: ticket.sector ?? "",
     });
 
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleDelete = async (ticketId) => {
-    const confirmed = window.confirm("Deseja realmente excluir este chamado?");
+    const confirmed = await confirm({
+      title: "Excluir chamado",
+      message: "Deseja realmente excluir este chamado? Esta acao nao pode ser desfeita.",
+      confirmLabel: "Excluir",
+      cancelLabel: "Cancelar",
+      tone: "danger",
+    });
     if (!confirmed) return;
 
     try {
       await api.delete(`/tickets/${ticketId}`);
-      alert("Chamado excluído com sucesso!");
-      loadTickets();
+      setTickets((current) => current.filter((ticket) => ticket.id !== ticketId));
+      notify("Chamado excluido com sucesso!", "success");
 
       if (editingId === ticketId) {
         resetForm();
       }
     } catch (error) {
       console.error(error);
-      alert(error.response?.data?.detail || "Erro ao excluir chamado");
+      notify(error.response?.data?.detail || "Erro ao excluir chamado", "error");
     }
   };
 
   const getStatusClass = (status) => {
-    if (status === "Aberto") return "bg-blue-100 text-blue-700";
-    if (status === "Em atendimento") return "bg-yellow-100 text-yellow-700";
-    if (status === "Resolvido") return "bg-green-100 text-green-700";
-    if (status === "Fechado") return "bg-slate-200 text-slate-700";
-    return "bg-slate-200 text-slate-700";
+    if (status === "Resolvido") return "status-online";
+    if (status === "Fechado") return "status-neutral";
+    if (status === "Em atendimento") return "status-neutral";
+    return "status-offline";
   };
 
   const getPriorityClass = (priority) => {
-    if (priority === "Baixa") return "bg-slate-200 text-slate-700";
-    if (priority === "Média") return "bg-blue-100 text-blue-700";
-    if (priority === "Alta") return "bg-orange-100 text-orange-700";
-    if (priority === "Crítica") return "bg-red-100 text-red-700";
-    return "bg-slate-200 text-slate-700";
+    if (priority === "Crítica") return "status-offline";
+    if (priority === "Alta") return "status-neutral";
+    if (priority === "Média") return "status-online";
+    return "status-neutral";
+  };
+
+  const openTickets = filteredTickets.filter((ticket) => ticket.status !== "Fechado" && ticket.status !== "Resolvido").length;
+
+  const {
+    sortConfig,
+    requestSort,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    totalPages,
+    totalItems,
+    paginatedItems,
+  } = useDataTable(filteredTickets, {
+    initialSort: { key: "title", direction: "asc" },
+  });
+
+  const getSortIndicator = (key) => {
+    if (sortConfig?.key !== key) return "↕";
+    return sortConfig.direction === "asc" ? "↑" : "↓";
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-3xl font-bold text-slate-800">Chamados</h2>
-        <p className="text-slate-500">Gerenciamento de chamados do sistema</p>
-      </div>
+      <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="section-card">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Fluxo de suporte
+          </p>
+          <h2 className="page-title mt-3 text-3xl md:text-[2.6rem]">
+            Registre, acompanhe e distribua chamados com mais contexto tecnico.
+          </h2>
+          <p className="page-subtitle">
+            Conecte o atendimento ao equipamento, setor e responsavel para acelerar o suporte.
+          </p>
+        </div>
 
-      <div className="rounded-2xl bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-xl font-bold text-slate-800">
-          {editingId ? "Editar chamado" : "Abrir chamado"}
-        </h3>
+        <div className="section-card">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Total</p>
+              <p className="mt-3 text-3xl font-semibold text-slate-900">{filteredTickets.length}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Em aberto</p>
+              <p className="mt-3 text-3xl font-semibold text-rose-700">{openTickets}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Resolvidos</p>
+              <p className="mt-3 text-3xl font-semibold text-emerald-700">
+                {filteredTickets.filter((ticket) => ticket.status === "Resolvido" || ticket.status === "Fechado").length}
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <input
-            type="text"
-            name="title"
-            placeholder="Título"
-            value={form.title}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-            required
-          />
+      <section className="section-card">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Formulario</p>
+            <h3 className="mt-2 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
+              {editingId ? "Atualizar chamado" : "Abrir chamado"}
+            </h3>
+          </div>
+          <p className="text-sm text-slate-500">
+            O setor pode ser preenchido automaticamente ao selecionar um computador.
+          </p>
+        </div>
 
-          <select
-            name="priority"
-            value={form.priority}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          >
-            <option value="Baixa">Baixa</option>
-            <option value="Média">Média</option>
-            <option value="Alta">Alta</option>
-            <option value="Crítica">Crítica</option>
-          </select>
+        <form onSubmit={handleSubmit} className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div>
+            <label className="field-label">Titulo</label>
+            <input type="text" name="title" value={form.title} onChange={handleChange} className="field-input" required />
+          </div>
 
-          <select
-            name="computer_id"
-            value={form.computer_id}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          >
-            <option value="">Nenhum computador</option>
-            {computers.map((computer) => (
-              <option key={computer.id} value={computer.id}>
-                {computer.hostname}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label className="field-label">Prioridade</label>
+            <select name="priority" value={form.priority} onChange={handleChange} className="field-input">
+              <option value="Baixa">Baixa</option>
+              <option value="Média">Média</option>
+              <option value="Alta">Alta</option>
+              <option value="Crítica">Crítica</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="field-label">Computador</label>
+            <select name="computer_id" value={form.computer_id} onChange={handleChange} className="field-input">
+              <option value="">Identificar automaticamente</option>
+              {computers.map((computer) => (
+                <option key={computer.id} value={computer.id}>
+                  {computer.hostname}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {editingId && currentUser?.role !== "operator" && (
             <>
-              <select
-                name="status"
-                value={form.status}
-                onChange={handleChange}
-                className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-              >
-                <option value="Aberto">Aberto</option>
-                <option value="Em atendimento">Em atendimento</option>
-                <option value="Resolvido">Resolvido</option>
-                <option value="Fechado">Fechado</option>
-              </select>
+              <div>
+                <label className="field-label">Status</label>
+                <select name="status" value={form.status} onChange={handleChange} className="field-input">
+                  <option value="Aberto">Aberto</option>
+                  <option value="Em atendimento">Em atendimento</option>
+                  <option value="Resolvido">Resolvido</option>
+                  <option value="Fechado">Fechado</option>
+                </select>
+              </div>
 
               {currentUser?.role === "admin" && (
-                <select
-                  name="assigned_to_id"
-                  value={form.assigned_to_id}
-                  onChange={handleChange}
-                  className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-                >
-                  <option value="">Nenhum responsável</option>
-                  {users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name}
-                    </option>
-                  ))}
-                </select>
+                <div>
+                  <label className="field-label">Responsavel</label>
+                  <select name="assigned_to_id" value={form.assigned_to_id} onChange={handleChange} className="field-input">
+                    <option value="">Nenhum responsavel</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
+
+              <div>
+                <label className="field-label">Setor</label>
+                <input type="text" name="sector" value={form.sector} onChange={handleChange} className="field-input" />
+              </div>
             </>
           )}
 
-          <textarea
-            name="description"
-            placeholder="Descrição do problema"
-            value={form.description}
-            onChange={handleChange}
-            rows="4"
-            className="md:col-span-2 xl:col-span-3 rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-            required
-          />
+          <div className="md:col-span-2 xl:col-span-3">
+            <label className="field-label">Descricao</label>
+            <textarea name="description" value={form.description} onChange={handleChange} rows="4" className="field-input" required />
+          </div>
 
-          <div className="md:col-span-2 xl:col-span-3 flex gap-3">
-            <button
-              type="submit"
-              className="rounded-lg bg-slate-900 px-4 py-3 text-white hover:bg-slate-800"
-            >
-              {editingId ? "Salvar alterações" : "Abrir chamado"}
+          <div className="flex flex-wrap gap-3 md:col-span-2 xl:col-span-3">
+            <button type="submit" className="btn-primary">
+              {editingId ? "Salvar alteracoes" : "Abrir chamado"}
             </button>
 
             {editingId && (
-              <button
-                type="button"
-                onClick={resetForm}
-                className="rounded-lg bg-slate-200 px-4 py-3 text-slate-800 hover:bg-slate-300"
-              >
-                Cancelar edição
+              <button type="button" onClick={resetForm} className="btn-secondary">
+                Cancelar edicao
               </button>
             )}
           </div>
         </form>
-      </div>
+      </section>
 
-      <div className="rounded-2xl bg-white p-4 shadow-sm">
+      <section className="section-card">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <input
-            type="text"
-            placeholder="Buscar por título ou descrição"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          />
+          <input type="text" placeholder="Titulo, descricao, solicitante ou computador" value={search} onChange={(e) => setSearch(e.target.value)} className="field-input" />
 
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          >
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="field-input">
             <option value="">Todos os status</option>
             <option value="Aberto">Aberto</option>
             <option value="Em atendimento">Em atendimento</option>
@@ -308,11 +375,7 @@ function Tickets() {
             <option value="Fechado">Fechado</option>
           </select>
 
-          <select
-            value={priorityFilter}
-            onChange={(e) => setPriorityFilter(e.target.value)}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          >
+          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="field-input">
             <option value="">Todas as prioridades</option>
             <option value="Baixa">Baixa</option>
             <option value="Média">Média</option>
@@ -326,64 +389,56 @@ function Tickets() {
               setStatusFilter("");
               setPriorityFilter("");
             }}
-            className="rounded-lg bg-slate-200 px-4 py-3 text-slate-800 hover:bg-slate-300"
+            className="btn-secondary"
           >
             Limpar filtros
           </button>
         </div>
-      </div>
+      </section>
 
-      <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <table className="min-w-full">
-          <thead className="bg-slate-100">
+      <section className="table-shell">
+        <table>
+          <thead>
             <tr>
-              <th className="px-4 py-3 text-left">Título</th>
-              <th className="px-4 py-3 text-left">Setor</th>
-              <th className="px-4 py-3 text-left">Status</th>
-              <th className="px-4 py-3 text-left">Prioridade</th>
-              <th className="px-4 py-3 text-left">Solicitante</th>
-              <th className="px-4 py-3 text-left">Responsável</th>
-              <th className="px-4 py-3 text-left">Ações</th>
+              <th><button type="button" onClick={() => requestSort("title")} className="table-sort-button">Titulo <span className="table-sort-indicator">{getSortIndicator("title")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("sector")} className="table-sort-button">Setor <span className="table-sort-indicator">{getSortIndicator("sector")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("computer_hostname")} className="table-sort-button">Computador <span className="table-sort-indicator">{getSortIndicator("computer_hostname")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("status")} className="table-sort-button">Status <span className="table-sort-indicator">{getSortIndicator("status")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("priority")} className="table-sort-button">Prioridade <span className="table-sort-indicator">{getSortIndicator("priority")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("requester_name")} className="table-sort-button">Solicitante <span className="table-sort-indicator">{getSortIndicator("requester_name")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("assigned_to_name")} className="table-sort-button">Responsavel <span className="table-sort-indicator">{getSortIndicator("assigned_to_name")}</span></button></th>
+              <th>Acoes</th>
             </tr>
           </thead>
           <tbody>
-            {filteredTickets.length === 0 ? (
+            {totalItems === 0 ? (
               <tr>
-                <td colSpan="7" className="px-4 py-6 text-center text-slate-500">
+                <td colSpan="8" className="px-4 py-10 text-center text-slate-500">
                   Nenhum chamado encontrado.
                 </td>
               </tr>
             ) : (
-              filteredTickets.map((ticket) => (
-                <tr key={ticket.id} className="border-t border-slate-200">
-                  <td className="px-4 py-3">{ticket.title}</td>
-                  <td className="px-4 py-3">{ticket.sector || "-"}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-3 py-1 text-sm font-medium ${getStatusClass(ticket.status)}`}>
-                      {ticket.status}
-                    </span>
+              paginatedItems.map((ticket) => (
+                <tr key={ticket.id}>
+                  <td>{ticket.title}</td>
+                  <td>{ticket.sector || "-"}</td>
+                  <td>{ticket.computer_hostname || "-"}</td>
+                  <td>
+                    <span className={getStatusClass(ticket.status)}>{ticket.status}</span>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-3 py-1 text-sm font-medium ${getPriorityClass(ticket.priority)}`}>
-                      {ticket.priority}
-                    </span>
+                  <td>
+                    <span className={getPriorityClass(ticket.priority)}>{ticket.priority}</span>
                   </td>
-                  <td className="px-4 py-3">{ticket.requester_id}</td>
-                  <td className="px-4 py-3">{ticket.assigned_to_id || "-"}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleEdit(ticket)}
-                        className="rounded-lg bg-blue-500 px-3 py-2 text-sm text-white hover:bg-blue-600"
-                      >
+                  <td>{ticket.requester_name || "-"}</td>
+                  <td>{ticket.assigned_to_name || "-"}</td>
+                  <td>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => handleEdit(ticket)} className="btn-secondary px-3 py-2 text-sm">
                         Editar
                       </button>
 
                       {currentUser?.role === "admin" && (
-                        <button
-                          onClick={() => handleDelete(ticket.id)}
-                          className="rounded-lg bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
-                        >
+                        <button onClick={() => handleDelete(ticket.id)} className="btn-danger px-3 py-2 text-sm">
                           Excluir
                         </button>
                       )}
@@ -394,7 +449,16 @@ function Tickets() {
             )}
           </tbody>
         </table>
-      </div>
+        <TableControls
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          setPage={setPage}
+          setPageSize={setPageSize}
+          totalItems={totalItems}
+          itemLabel="chamados"
+        />
+      </section>
     </div>
   );
 }

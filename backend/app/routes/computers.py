@@ -7,6 +7,8 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.asset import Asset
 from app.models.computer import Computer
+from app.models.operational_event import OperationalEvent
+from app.models.system_metric import SystemMetric
 from app.models.user import User
 from app.schemas.computer import ComputerCreate
 
@@ -94,6 +96,77 @@ def get_computer_assets(
 
     assets = db.query(Asset).filter(Asset.computer_id == computer_id).all()
     return assets
+
+
+@router.get("/computers/{computer_id}/metrics")
+def get_computer_metrics(
+    computer_id: int,
+    limit: int = Query(default=24, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+
+    if not computer:
+        raise HTTPException(status_code=404, detail="Computador nÃ£o encontrado")
+
+    metrics = (
+        db.query(SystemMetric)
+        .filter(SystemMetric.computer_id == computer_id)
+        .order_by(SystemMetric.sampled_at.desc(), SystemMetric.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    metrics.reverse()
+
+    return [
+        {
+            "id": metric.id,
+            "cpu_usage_percent": metric.cpu_usage_percent,
+            "memory_usage_percent": metric.memory_usage_percent,
+            "disk_free_gb": metric.disk_free_gb,
+            "disk_free_percent": metric.disk_free_percent,
+            "uptime_hours": metric.uptime_hours,
+            "sampled_at": metric.sampled_at,
+        }
+        for metric in metrics
+    ]
+
+
+@router.get("/computers/{computer_id}/events")
+def get_computer_events(
+    computer_id: int,
+    limit: int = Query(default=20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+
+    if not computer:
+        raise HTTPException(status_code=404, detail="Computador nao encontrado")
+
+    events = (
+        db.query(OperationalEvent)
+        .filter(OperationalEvent.computer_id == computer_id)
+        .order_by(OperationalEvent.created_at.desc(), OperationalEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": event.id,
+            "computer_id": event.computer_id,
+            "severity": event.severity,
+            "event_type": event.event_type,
+            "metric": event.metric,
+            "title": event.title,
+            "message": event.message,
+            "created_at": event.created_at,
+        }
+        for event in events
+    ]
 
 
 @router.put("/computers/{computer_id}")

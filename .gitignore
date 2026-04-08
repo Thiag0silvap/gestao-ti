@@ -6,12 +6,18 @@ __pycache__/
 .venv/
 venv/
 env/
+.tmp/
+build/
 
 # Logs
 *.log
 
 # Environment
 .env
+
+# Agent build/package artifacts
+agent/GestãoTI-Agent/
+agent/dist/
 
 # Node / React
 node_modules/

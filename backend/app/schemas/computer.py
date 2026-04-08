@@ -9,6 +9,13 @@ class ComputerBase(BaseModel):
     mac_address: str | None = None
     cpu: str | None = None
     ram: str | None = None
+    memory_type: str | None = None
+    memory_speed: str | None = None
+    cpu_usage_percent: float | None = None
+    memory_usage_percent: float | None = None
+    disk_free_gb: float | None = None
+    disk_free_percent: float | None = None
+    uptime_hours: float | None = None
     disk: str | None = None
     os: str | None = None
     sector: str | None = None

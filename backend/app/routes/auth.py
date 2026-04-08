@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -25,7 +26,9 @@ def create_user(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    existing_user = db.query(User).filter(User.username == data.username).first()
+    existing_user = db.query(User).filter(
+        func.lower(User.username) == data.username.lower()
+    ).first()
 
     if existing_user:
         raise HTTPException(status_code=400, detail="Username já existe")
@@ -35,7 +38,7 @@ def create_user(
 
     user = User(
         name=data.name,
-        username=data.username,
+        username=data.username.lower(),
         password_hash=get_password_hash(data.password),
         role=data.role,
         sector=data.sector,
@@ -61,7 +64,9 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.username == form_data.username).first()
+    user = db.query(User).filter(
+        func.lower(User.username) == form_data.username.lower()
+    ).first()
 
     if not user:
         raise HTTPException(
@@ -146,7 +151,7 @@ def update_user(
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     existing_user = db.query(User).filter(
-        User.username == data.username,
+        func.lower(User.username) == data.username.lower(),
         User.id != user_id
     ).first()
 
@@ -154,7 +159,7 @@ def update_user(
         raise HTTPException(status_code=400, detail="Username já existe")
 
     user.name = data.name
-    user.username = data.username
+    user.username = data.username.lower()
     user.role = data.role
     user.sector = data.sector
     user.is_active = data.is_active

@@ -1,14 +1,20 @@
-import Sidebar from "./Sidebar";
+import { useState } from "react";
+
 import Navbar from "./Navbar";
+import Sidebar from "./Sidebar";
 
 function Layout({ children }) {
-  return (
-    <div className="flex min-h-screen bg-slate-100">
-      <Sidebar />
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
-      <div className="flex flex-1 flex-col">
-        <Navbar />
-        <main className="p-6">{children}</main>
+  return (
+    <div className="app-shell">
+      <div className="relative z-10 flex min-h-screen">
+        <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Navbar onOpenSidebar={() => setSidebarOpen(true)} />
+          <main className="flex-1 p-4 md:p-6 xl:p-8">{children}</main>
+        </div>
       </div>
     </div>
   );

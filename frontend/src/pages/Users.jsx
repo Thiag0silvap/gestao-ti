@@ -1,6 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
 import api from "../api/api";
+import TableControls from "../components/TableControls";
+import { useUI } from "../components/UIProvider";
+import useAutoRefresh from "../hooks/useAutoRefresh";
+import useDataTable from "../hooks/useDataTable";
 
 const initialForm = {
   name: "",
@@ -15,32 +20,62 @@ function Users() {
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
-
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
   const currentUser = JSON.parse(localStorage.getItem("user"));
+  const { notify, confirm } = useUI();
 
-  const loadUsers = () => {
-    api.get("/users")
-      .then((response) => setUsers(response.data))
-      .catch((error) => {
-        console.error(error);
-
-        if (error.response?.status === 401) {
-          localStorage.removeItem("token");
-          localStorage.removeItem("user");
-          navigate("/");
-        } else if (error.response?.status === 403) {
-          alert("Você não tem permissão para acessar usuários.");
-          navigate("/dashboard");
-        } else {
-          alert("Erro ao carregar usuários");
-        }
-      });
-  };
-
-  useEffect(() => {
-    loadUsers();
+  const upsertUser = useCallback((userData) => {
+    setUsers((current) => {
+      const exists = current.some((item) => item.id === userData.id);
+      if (exists) {
+        return current.map((item) => (item.id === userData.id ? userData : item));
+      }
+      return [userData, ...current];
+    });
   }, []);
+
+  const loadUsers = useCallback(async () => {
+    try {
+      const response = await api.get("/users");
+      setUsers(response.data);
+      return response.data;
+    } catch (error) {
+      console.error(error);
+
+      if (error.response?.status === 401) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        navigate("/");
+      } else if (error.response?.status === 403) {
+        notify("Você não tem permissão para acessar usuários.", "error");
+        navigate("/dashboard");
+      } else {
+        notify("Erro ao carregar usuários", "error");
+      }
+
+      return [];
+    }
+  }, [navigate, notify]);
+
+  useAutoRefresh(loadUsers);
+
+  const roles = useMemo(() => [...new Set(users.map((user) => user.role).filter(Boolean))], [users]);
+
+  const filteredUsers = useMemo(() => {
+    return users.filter((user) => {
+      const searchText = search.toLowerCase();
+      const matchesSearch =
+        user.name?.toLowerCase().includes(searchText) ||
+        user.username?.toLowerCase().includes(searchText) ||
+        user.sector?.toLowerCase().includes(searchText);
+
+      const matchesRole = !roleFilter || user.role === roleFilter;
+      return matchesSearch && matchesRole;
+    });
+  }, [users, search, roleFilter]);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -58,6 +93,7 @@ function Users() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSubmitting(true);
 
     try {
       const payload = {
@@ -65,24 +101,34 @@ function Users() {
         password: form.password || null,
       };
 
+      let savedUser;
+
       if (editingId) {
-        await api.put(`/users/${editingId}`, payload);
-        alert("Usuário atualizado com sucesso!");
+        const response = await api.put(`/users/${editingId}`, payload);
+        savedUser = response.data;
+        upsertUser(savedUser);
+        notify("Usuário atualizado com sucesso!", "success");
       } else {
-        await api.post("/users", payload);
-        alert("Usuário cadastrado com sucesso!");
+        const response = await api.post("/users", payload);
+        savedUser = response.data;
+        upsertUser(savedUser);
+        notify("Usuário cadastrado com sucesso!", "success");
       }
 
+      setSearch(savedUser?.username || "");
+      setRoleFilter(savedUser?.role || "");
+      setPage(1);
       resetForm();
-      loadUsers();
     } catch (error) {
       console.error(error);
 
       if (error.response?.data?.detail) {
-        alert(error.response.data.detail);
+        notify(error.response.data.detail, "error");
       } else {
-        alert("Erro ao salvar usuário");
+        notify("Erro ao salvar usuário", "error");
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -102,186 +148,215 @@ function Users() {
 
   const handleToggleStatus = async (userId) => {
     try {
-      await api.patch(`/users/${userId}/status`);
-      alert("Status do usuário atualizado!");
-      loadUsers();
+      const response = await api.patch(`/users/${userId}/status`);
+      upsertUser(response.data);
+      notify("Status do usuário atualizado!", "success");
     } catch (error) {
       console.error(error);
-      alert(error.response?.data?.detail || "Erro ao alterar status do usuário");
+      notify(error.response?.data?.detail || "Erro ao alterar status do usuário", "error");
     }
   };
 
   const handleDelete = async (userId) => {
-    const confirmed = window.confirm("Deseja realmente excluir este usuário?");
+    const confirmed = await confirm({
+      title: "Excluir usuário",
+      message: "Deseja realmente excluir este usuário? Esta ação não pode ser desfeita.",
+      confirmLabel: "Excluir",
+      cancelLabel: "Cancelar",
+      tone: "danger",
+    });
 
     if (!confirmed) return;
 
     try {
       await api.delete(`/users/${userId}`);
-      alert("Usuário excluído com sucesso!");
-      loadUsers();
+      setUsers((current) => current.filter((user) => user.id !== userId));
+      notify("Usuário excluído com sucesso!", "success");
 
       if (editingId === userId) {
         resetForm();
       }
     } catch (error) {
       console.error(error);
-      alert(error.response?.data?.detail || "Erro ao excluir usuário");
+      notify(error.response?.data?.detail || "Erro ao excluir usuário", "error");
     }
+  };
+
+  const activeUsers = filteredUsers.filter((user) => user.is_active).length;
+
+  const {
+    sortConfig,
+    requestSort,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    totalPages,
+    totalItems,
+    paginatedItems,
+  } = useDataTable(filteredUsers, {
+    initialSort: { key: "name", direction: "asc" },
+  });
+
+  const getSortIndicator = (key) => {
+    if (sortConfig?.key !== key) return "↕";
+    return sortConfig.direction === "asc" ? "↑" : "↓";
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-3xl font-bold text-slate-800">Usuários</h2>
-        <p className="text-slate-500">Gerenciamento de usuários do sistema</p>
-      </div>
+      <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="section-card">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Acessos e perfis
+          </p>
+          <h2 className="page-title mt-3 text-3xl md:text-[2.6rem]">
+            Controle quem entra, com qual perfil e em qual contexto operacional.
+          </h2>
+          <p className="page-subtitle">
+            Administre usuários ativos, níveis de acesso e setores sem perder clareza na gestão.
+          </p>
+        </div>
 
-      <div className="rounded-2xl bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-xl font-bold text-slate-800">
-          {editingId ? "Editar usuário" : "Cadastrar usuário"}
-        </h3>
+        <div className="section-card">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Total</p>
+              <p className="mt-3 text-3xl font-semibold text-slate-900">{filteredUsers.length}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ativos</p>
+              <p className="mt-3 text-3xl font-semibold text-emerald-700">{activeUsers}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Perfis</p>
+              <p className="mt-3 text-3xl font-semibold text-amber-700">{roles.length}</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <input
-            type="text"
-            name="name"
-            placeholder="Nome completo"
-            value={form.name}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-            required
-          />
+      <section className="section-card">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Cadastro</p>
+            <h3 className="mt-2 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
+              {editingId ? "Editar usuário" : "Cadastrar usuário"}
+            </h3>
+          </div>
+          <p className="text-sm text-slate-500">
+            Somente administradores podem criar, editar ou desativar acessos.
+          </p>
+        </div>
 
-          <input
-            type="text"
-            name="username"
-            placeholder="Usuário"
-            value={form.username}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-            required
-          />
-
+        <form onSubmit={handleSubmit} className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <input type="text" name="name" placeholder="Nome completo" value={form.name} onChange={handleChange} className="field-input" required />
+          <input type="text" name="username" placeholder="Usuário" value={form.username} onChange={handleChange} className="field-input" required />
           <input
             type="password"
             name="password"
             placeholder={editingId ? "Nova senha (opcional)" : "Senha"}
             value={form.password}
             onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+            className="field-input"
             required={!editingId}
           />
-
-          <select
-            name="role"
-            value={form.role}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          >
+          <select name="role" value={form.role} onChange={handleChange} className="field-input">
             <option value="admin">admin</option>
             <option value="technician">technician</option>
             <option value="operator">operator</option>
           </select>
+          <input type="text" name="sector" placeholder="Setor" value={form.sector} onChange={handleChange} className="field-input" />
 
-          <input
-            type="text"
-            name="sector"
-            placeholder="Setor"
-            value={form.sector}
-            onChange={handleChange}
-            className="rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-          />
-
-          <label className="flex items-center gap-2 text-slate-700">
-            <input
-              type="checkbox"
-              name="is_active"
-              checked={form.is_active}
-              onChange={handleChange}
-            />
+          <label className="flex items-center gap-3 rounded-[20px] border border-slate-200 bg-white/70 px-4 py-3 text-slate-700">
+            <input type="checkbox" name="is_active" checked={form.is_active} onChange={handleChange} />
             Usuário ativo
           </label>
 
-          <div className="md:col-span-2 flex gap-3">
-            <button
-              type="submit"
-              className="rounded-lg bg-slate-900 px-4 py-3 text-white hover:bg-slate-800"
-            >
-              {editingId ? "Salvar alterações" : "Cadastrar usuário"}
+          <div className="flex flex-wrap gap-3 md:col-span-2">
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting
+                ? (editingId ? "Salvando..." : "Cadastrando...")
+                : (editingId ? "Salvar alterações" : "Cadastrar usuário")}
             </button>
 
             {editingId && (
-              <button
-                type="button"
-                onClick={resetForm}
-                className="rounded-lg bg-slate-200 px-4 py-3 text-slate-800 hover:bg-slate-300"
-              >
+              <button type="button" onClick={resetForm} className="btn-secondary">
                 Cancelar edição
               </button>
             )}
           </div>
         </form>
-      </div>
+      </section>
 
-      <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
-        <table className="min-w-full">
-          <thead className="bg-slate-100">
+      <section className="section-card">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <input type="text" placeholder="Buscar por nome, usuário ou setor" value={search} onChange={(e) => setSearch(e.target.value)} className="field-input" />
+
+          <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="field-input">
+            <option value="">Todos os perfis</option>
+            {roles.map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
+
+          <button
+            onClick={() => {
+              setSearch("");
+              setRoleFilter("");
+            }}
+            className="btn-secondary"
+          >
+            Limpar filtros
+          </button>
+        </div>
+      </section>
+
+      <section className="table-shell">
+        <table>
+          <thead>
             <tr>
-              <th className="px-4 py-3 text-left">Nome</th>
-              <th className="px-4 py-3 text-left">Usuário</th>
-              <th className="px-4 py-3 text-left">Perfil</th>
-              <th className="px-4 py-3 text-left">Setor</th>
-              <th className="px-4 py-3 text-left">Status</th>
-              <th className="px-4 py-3 text-left">Ações</th>
+              <th><button type="button" onClick={() => requestSort("name")} className="table-sort-button">Nome <span className="table-sort-indicator">{getSortIndicator("name")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("username")} className="table-sort-button">Usuário <span className="table-sort-indicator">{getSortIndicator("username")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("role")} className="table-sort-button">Perfil <span className="table-sort-indicator">{getSortIndicator("role")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("sector")} className="table-sort-button">Setor <span className="table-sort-indicator">{getSortIndicator("sector")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("is_active")} className="table-sort-button">Status <span className="table-sort-indicator">{getSortIndicator("is_active")}</span></button></th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {users.length === 0 ? (
+            {totalItems === 0 ? (
               <tr>
-                <td colSpan="6" className="px-4 py-6 text-center text-slate-500">
+                <td colSpan="6" className="px-4 py-10 text-center text-slate-500">
                   Nenhum usuário encontrado.
                 </td>
               </tr>
             ) : (
-              users.map((user) => (
-                <tr key={user.id} className="border-t border-slate-200">
-                  <td className="px-4 py-3">{user.name}</td>
-                  <td className="px-4 py-3">{user.username}</td>
-                  <td className="px-4 py-3">{user.role}</td>
-                  <td className="px-4 py-3">{user.sector || "-"}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`rounded-full px-3 py-1 text-sm font-medium ${
-                        user.is_active
-                          ? "bg-green-100 text-green-700"
-                          : "bg-red-100 text-red-700"
-                      }`}
-                    >
+              paginatedItems.map((user) => (
+                <tr key={user.id}>
+                  <td>{user.name}</td>
+                  <td>{user.username}</td>
+                  <td>{user.role}</td>
+                  <td>{user.sector || "-"}</td>
+                  <td>
+                    <span className={user.is_active ? "status-online" : "status-offline"}>
                       {user.is_active ? "Ativo" : "Inativo"}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleEdit(user)}
-                        className="rounded-lg bg-blue-500 px-3 py-2 text-sm text-white hover:bg-blue-600"
-                      >
+                  <td>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => handleEdit(user)} className="btn-secondary px-3 py-2 text-sm">
                         Editar
                       </button>
 
-                      <button
-                        onClick={() => handleToggleStatus(user.id)}
-                        className="rounded-lg bg-yellow-500 px-3 py-2 text-sm text-white hover:bg-yellow-600"
-                      >
+                      <button onClick={() => handleToggleStatus(user.id)} className="btn-secondary px-3 py-2 text-sm">
                         {user.is_active ? "Desativar" : "Ativar"}
                       </button>
 
                       {currentUser?.id !== user.id && (
-                        <button
-                          onClick={() => handleDelete(user.id)}
-                          className="rounded-lg bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
-                        >
+                        <button onClick={() => handleDelete(user.id)} className="btn-danger px-3 py-2 text-sm">
                           Excluir
                         </button>
                       )}
@@ -292,7 +367,16 @@ function Users() {
             )}
           </tbody>
         </table>
-      </div>
+        <TableControls
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          setPage={setPage}
+          setPageSize={setPageSize}
+          totalItems={totalItems}
+          itemLabel="usuarios"
+        />
+      </section>
     </div>
   );
 }
