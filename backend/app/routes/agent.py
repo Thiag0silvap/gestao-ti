@@ -356,6 +356,28 @@ def sync_computer(
     }
 
 
+@router.get("/agent/computers/{computer_id}/remote-action")
+def get_pending_remote_action(
+    computer_id: int,
+    x_api_key: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    if x_api_key != settings.AGENT_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid agent key")
+
+    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    if not computer:
+        raise HTTPException(status_code=404, detail="Computador nao encontrado")
+
+    pending_action = get_next_pending_action(db, computer.id)
+    db.commit()
+
+    return {
+        "computer_id": computer.id,
+        "remote_action": serialize_remote_action(pending_action),
+    }
+
+
 @router.post("/agent/remote-actions/{action_id}/status")
 def update_remote_action_status(
     action_id: int,

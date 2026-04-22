@@ -3,6 +3,13 @@ setlocal
 
 cd /d "%~dp0"
 
+net session >nul 2>&1
+if not "%errorlevel%"=="0" (
+  echo [Agent] Permissao de administrador necessaria. Solicitando elevacao...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+
 if not exist ".env" (
   echo [Agent] Arquivo .env nao encontrado nesta pasta.
   pause

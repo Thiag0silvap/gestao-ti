@@ -1,5 +1,6 @@
 import argparse
 import getpass
+import ipaddress
 import json
 import logging
 import os
@@ -32,9 +33,10 @@ def get_runtime_dir() -> Path:
 RUNTIME_DIR = get_runtime_dir()
 ENV_FILE = RUNTIME_DIR / ".env"
 load_dotenv(ENV_FILE, encoding="utf-8-sig")
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.4"
 
 DEFAULT_INTERVAL_SECONDS = 300
+DEFAULT_REMOTE_ACTION_INTERVAL_SECONDS = 20
 DEFAULT_TIMEOUT_SECONDS = 15
 DEFAULT_SECTOR = "Nao informado"
 DEFAULT_EQUIPMENT_STATUS = "Ativo"
@@ -50,6 +52,16 @@ IGNORED_INTERFACE_TOKENS = (
     "pseudo",
     "docker",
     "wsl",
+    "vpn",
+    "tap",
+    "tun",
+    "ppp",
+    "wireguard",
+    "anyconnect",
+    "openvpn",
+    "zerotier",
+    "tailscale",
+    "fortinet",
 )
 MEMORY_TYPE_MAP = {
     20: "DDR",
@@ -170,6 +182,7 @@ def get_offline_queue_size() -> int:
 def update_local_status(sync_state: dict, current_state: str, next_scheduled_at: str | None = None) -> None:
     status_payload = {
         "agent_id": sync_state["agent_id"],
+        "computer_id": sync_state.get("computer_id"),
         "agent_version": APP_VERSION,
         "agent_started_at": sync_state["agent_started_at"],
         "current_state": current_state,
@@ -177,6 +190,7 @@ def update_local_status(sync_state: dict, current_state: str, next_scheduled_at:
         "last_success_at": sync_state.get("last_success_at"),
         "last_error_at": sync_state.get("last_error_at"),
         "last_error_message": sync_state.get("last_error_message"),
+        "last_remote_action_check_at": sync_state.get("last_remote_action_check_at"),
         "sync_attempt": sync_state.get("sync_attempt", 0),
         "consecutive_failures": sync_state.get("consecutive_failures", 0),
         "offline_queue_size": get_offline_queue_size(),
@@ -234,6 +248,10 @@ def get_env_bool(name: str, default: bool) -> bool:
 
 def get_settings() -> dict:
     interval_raw = os.getenv("INTERVAL_SECONDS", str(DEFAULT_INTERVAL_SECONDS))
+    remote_action_interval_raw = os.getenv(
+        "REMOTE_ACTION_INTERVAL_SECONDS",
+        str(DEFAULT_REMOTE_ACTION_INTERVAL_SECONDS),
+    )
     timeout_raw = os.getenv("REQUEST_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
 
     try:
@@ -242,21 +260,33 @@ def get_settings() -> dict:
         raise ValueError("INTERVAL_SECONDS deve ser um numero inteiro >= 30") from exc
 
     try:
+        remote_action_interval_seconds = max(10, int(remote_action_interval_raw))
+    except ValueError as exc:
+        raise ValueError("REMOTE_ACTION_INTERVAL_SECONDS deve ser um numero inteiro >= 10") from exc
+
+    try:
         timeout_seconds = max(5, int(timeout_raw))
     except ValueError as exc:
         raise ValueError("REQUEST_TIMEOUT_SECONDS deve ser um numero inteiro >= 5") from exc
 
     api_url = (os.getenv("API_URL") or "").strip()
+    preferred_ip_prefixes = [
+        prefix.strip()
+        for prefix in (os.getenv("PREFERRED_IP_PREFIXES") or "").split(",")
+        if prefix.strip()
+    ]
     settings = {
         "api_url": api_url,
         "api_key": (os.getenv("AGENT_API_KEY") or "").strip(),
         "interval_seconds": interval_seconds,
+        "remote_action_interval_seconds": remote_action_interval_seconds,
         "timeout_seconds": timeout_seconds,
         "sector": (os.getenv("DEFAULT_SECTOR") or DEFAULT_SECTOR).strip(),
         "patrimony_number": (os.getenv("PATRIMONY_NUMBER") or "").strip(),
         "equipment_status": (os.getenv("EQUIPMENT_STATUS") or DEFAULT_EQUIPMENT_STATUS).strip(),
         "notes": (os.getenv("AGENT_NOTES") or DEFAULT_NOTES).strip(),
         "verify_ssl": get_env_bool("VERIFY_SSL", True),
+        "preferred_ip_prefixes": preferred_ip_prefixes,
     }
 
     if not settings["api_url"]:
@@ -270,6 +300,12 @@ def get_settings() -> dict:
         raise ValueError("API_URL do agent esta invalida")
 
     settings["api_base_url"] = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    api_host_parts = parsed_url.hostname.split(".") if parsed_url.hostname else []
+    if not settings["preferred_ip_prefixes"] and len(api_host_parts) == 4:
+        settings["preferred_ip_prefixes"] = [
+            ".".join(api_host_parts[:3]) + ".",
+            ".".join(api_host_parts[:2]) + ".",
+        ]
 
     return settings
 
@@ -284,6 +320,10 @@ def get_sleep_interval(settings: dict) -> int:
     base_interval = settings["interval_seconds"]
     jitter_window = min(30, max(5, int(base_interval * 0.1)))
     return base_interval + random.randint(0, jitter_window)
+
+
+def get_remote_action_interval(settings: dict) -> int:
+    return settings["remote_action_interval_seconds"]
 
 
 def create_http_session() -> requests.Session:
@@ -425,74 +465,164 @@ def get_hostname() -> str:
 
 
 def get_logged_user() -> str:
+    if os.name == "nt":
+        powershell_output = run_command(
+            ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystem).UserName"],
+            timeout_seconds=5,
+        )
+        parsed_user = parse_command_output(powershell_output) if powershell_output else None
+        if parsed_user:
+            return parsed_user.split("\\")[-1].lower()
+
+        wmic_output = run_command(
+            ["wmic", "computersystem", "get", "username"],
+            timeout_seconds=5,
+        )
+        parsed_user = parse_command_output(wmic_output) if wmic_output else None
+        if parsed_user:
+            return parsed_user.split("\\")[-1].lower()
+
+    try:
+        users = psutil.users()
+        if users:
+            return users[0].name.split("\\")[-1].lower()
+    except Exception:
+        logging.debug("Falha ao obter usuario interativo via psutil.", exc_info=True)
+
     try:
         return getpass.getuser().lower()
     except Exception:
         return os.getenv("USERNAME", "desconhecido").lower()
 
 
-def get_ip_address() -> str | None:
+def is_valid_local_ipv4(ip_address: str | None) -> bool:
+    if not ip_address:
+        return False
+
     try:
-        hostname = socket.gethostname()
-        ip_address = socket.gethostbyname(hostname)
-        if ip_address and not ip_address.startswith("127.") and not ip_address.startswith("169.254."):
-            return ip_address
+        parsed_ip = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return False
+
+    return (
+        parsed_ip.version == 4
+        and not parsed_ip.is_loopback
+        and not parsed_ip.is_link_local
+        and not parsed_ip.is_multicast
+        and not parsed_ip.is_unspecified
+    )
+
+
+def normalize_mac_address(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+
+    mac_value = raw_value.replace("-", ":").upper()
+    if len(mac_value) == 17 and mac_value != "00:00:00:00:00:00":
+        return mac_value
+    return None
+
+
+def get_fallback_mac_address() -> str:
+    mac = uuid.getnode()
+    return ":".join([f"{(mac >> elements) & 0xFF:02X}" for elements in range(40, -1, -8)])
+
+
+def get_network_identity(settings: dict | None = None) -> dict:
+    settings = settings or {}
+    preferred_prefixes = settings.get("preferred_ip_prefixes") or []
+
+    candidates: list[dict] = []
+
+    try:
+        stats = psutil.net_if_stats()
+        addresses_by_interface = psutil.net_if_addrs()
+
+        for interface_name, interface_addresses in addresses_by_interface.items():
+            interface_stats = stats.get(interface_name)
+            if interface_stats and not interface_stats.isup:
+                continue
+
+            interface_name_normalized = interface_name.lower()
+            is_ignored_interface = any(
+                token in interface_name_normalized for token in IGNORED_INTERFACE_TOKENS
+            )
+            mac_address = next(
+                (
+                    normalize_mac_address(address.address)
+                    for address in interface_addresses
+                    if address.family == psutil.AF_LINK
+                ),
+                None,
+            )
+
+            for address in interface_addresses:
+                if address.family != socket.AF_INET or not is_valid_local_ipv4(address.address):
+                    continue
+
+                score = 0
+                if any(address.address.startswith(prefix) for prefix in preferred_prefixes):
+                    score += 100
+                if not is_ignored_interface:
+                    score += 35
+                if mac_address:
+                    score += 10
+                if is_ignored_interface:
+                    score -= 80
+
+                candidates.append(
+                    {
+                        "score": score,
+                        "interface_name": interface_name,
+                        "ip_address": address.address,
+                        "mac_address": mac_address,
+                    }
+                )
     except Exception:
-        logging.debug("Falha ao obter IP via gethostbyname", exc_info=True)
+        logging.debug("Falha ao obter IP/MAC via interfaces locais", exc_info=True)
+
+    if candidates:
+        candidates.sort(key=lambda candidate: candidate["score"], reverse=True)
+        selected = candidates[0]
+        logging.debug(
+            "Interface selecionada: %s (IP=%s, MAC=%s, score=%s)",
+            selected["interface_name"],
+            selected["ip_address"],
+            selected["mac_address"],
+            selected["score"],
+        )
+        return {
+            "ip_address": selected["ip_address"],
+            "mac_address": selected["mac_address"] or get_fallback_mac_address(),
+            "interface_name": selected["interface_name"],
+        }
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
             ip_address = sock.getsockname()[0]
-            if ip_address and not ip_address.startswith("127."):
-                return ip_address
+            if is_valid_local_ipv4(ip_address):
+                return {
+                    "ip_address": ip_address,
+                    "mac_address": get_fallback_mac_address(),
+                    "interface_name": None,
+                }
     except Exception:
         logging.debug("Falha ao obter IP via socket externo", exc_info=True)
 
-    try:
-        stats = psutil.net_if_stats()
-        for interface_name, addresses in psutil.net_if_addrs().items():
-            interface_name_normalized = interface_name.lower()
-            if any(token in interface_name_normalized for token in IGNORED_INTERFACE_TOKENS):
-                continue
-
-            interface_stats = stats.get(interface_name)
-            if interface_stats and not interface_stats.isup:
-                continue
-
-            for address in addresses:
-                if (
-                    address.family == socket.AF_INET
-                    and address.address
-                    and not address.address.startswith("127.")
-                    and not address.address.startswith("169.254.")
-                ):
-                    return address.address
-    except Exception:
-        logging.debug("Falha ao obter IP via interfaces locais", exc_info=True)
-
-    return None
+    return {
+        "ip_address": None,
+        "mac_address": get_fallback_mac_address(),
+        "interface_name": None,
+    }
 
 
-def get_mac_address() -> str:
-    try:
-        stats = psutil.net_if_stats()
-        addresses = psutil.net_if_addrs()
+def get_ip_address(settings: dict | None = None) -> str | None:
+    return get_network_identity(settings)["ip_address"]
 
-        for interface_name, interface_addresses in addresses.items():
-            interface_stats = stats.get(interface_name)
-            if interface_stats and not interface_stats.isup:
-                continue
 
-            for address in interface_addresses:
-                mac_value = address.address.replace("-", ":").upper()
-                if address.family == psutil.AF_LINK and len(mac_value) == 17 and mac_value != "00:00:00:00:00:00":
-                    return mac_value
-    except Exception:
-        logging.debug("Falha ao obter MAC via psutil", exc_info=True)
-
-    mac = uuid.getnode()
-    return ":".join([f"{(mac >> elements) & 0xFF:02X}" for elements in range(40, -1, -8)])
+def get_mac_address(settings: dict | None = None) -> str:
+    return get_network_identity(settings)["mac_address"]
 
 
 def get_cpu() -> str:
@@ -820,6 +950,7 @@ def build_payload(settings: dict, sync_state: dict) -> dict:
     uptime_hours = get_uptime_hours()
     printers = get_printers()
     collected_at = now_iso()
+    network_identity = get_network_identity(settings)
 
     return {
         "agent_id": sync_state["agent_id"],
@@ -835,8 +966,8 @@ def build_payload(settings: dict, sync_state: dict) -> dict:
         "sync_attempt": sync_state["sync_attempt"],
         "hostname": hostname,
         "user": get_logged_user(),
-        "ip_address": get_ip_address(),
-        "mac_address": get_mac_address(),
+        "ip_address": network_identity["ip_address"],
+        "mac_address": network_identity["mac_address"],
         "cpu": get_cpu(),
         "cpu_usage_percent": cpu_usage_percent,
         "ram": get_ram(),
@@ -890,12 +1021,17 @@ def build_remote_action_status_url(settings: dict, action_id: int) -> str:
     return f"{settings['api_base_url']}/agent/remote-actions/{action_id}/status"
 
 
+def build_remote_action_poll_url(settings: dict, computer_id: int) -> str:
+    return f"{settings['api_base_url']}/agent/computers/{computer_id}/remote-action"
+
+
 def post_inventory_payload(
     session: requests.Session,
     settings: dict,
     payload: dict,
     *,
     source_label: str,
+    sync_state: dict | None = None,
 ) -> tuple[bool, bool, str | None]:
     headers = {"X-API-KEY": settings["api_key"]}
 
@@ -929,6 +1065,8 @@ def post_inventory_payload(
 
         should_exit = False
         if response_json and response_json.get("id"):
+            if sync_state is not None:
+                sync_state["computer_id"] = int(response_json["id"])
             should_exit = process_remote_action(
                 session=session,
                 settings=settings,
@@ -981,6 +1119,56 @@ def send_remote_action_status(
         response.text.strip(),
     )
     return False
+
+
+def poll_remote_action(
+    session: requests.Session,
+    settings: dict,
+    sync_state: dict,
+    dry_run: bool = False,
+) -> bool:
+    if dry_run:
+        return False
+
+    computer_id = sync_state.get("computer_id")
+    if not computer_id:
+        return False
+
+    headers = {"X-API-KEY": settings["api_key"]}
+    sync_state["last_remote_action_check_at"] = now_iso()
+    update_local_status(sync_state, current_state="checking_actions")
+
+    try:
+        response = session.get(
+            build_remote_action_poll_url(settings, int(computer_id)),
+            headers=headers,
+            timeout=get_request_timeout(settings),
+            verify=settings["verify_ssl"],
+        )
+    except requests.exceptions.RequestException as exc:
+        logging.debug("Falha ao consultar acoes remotas: %s", exc)
+        return False
+
+    if not 200 <= response.status_code < 300:
+        logging.debug(
+            "Consulta de acoes remotas retornou status %s: %s",
+            response.status_code,
+            response.text.strip(),
+        )
+        return False
+
+    try:
+        response_json = response.json()
+    except ValueError:
+        logging.debug("Consulta de acoes remotas retornou resposta invalida.")
+        return False
+
+    return process_remote_action(
+        session=session,
+        settings=settings,
+        computer_id=int(computer_id),
+        action_data=response_json.get("remote_action"),
+    )
 
 
 def build_agent_updater_script(current_executable: Path, downloaded_executable: Path) -> Path:
@@ -1255,6 +1443,7 @@ def send_inventory(
         settings=settings,
         payload=payload,
         source_label="Sincronizacao",
+        sync_state=sync_state,
     )
 
     if success:
@@ -1313,11 +1502,13 @@ def main() -> int:
         "agent_id": get_or_create_agent_id(),
         "agent_started_at": now_iso(),
         "sync_attempt": 0,
+        "computer_id": None,
         "consecutive_failures": 0,
         "last_attempt_at": None,
         "last_success_at": None,
         "last_error_at": None,
         "last_error_message": None,
+        "last_remote_action_check_at": None,
     }
     update_local_status(sync_state, current_state="starting")
 
@@ -1326,6 +1517,10 @@ def main() -> int:
     logging.info("Versao do agente: %s", APP_VERSION)
     logging.info("API_URL: %s", settings["api_url"])
     logging.info("Intervalo configurado: %s segundos", settings["interval_seconds"])
+    logging.info(
+        "Intervalo de acoes remotas: %s segundos",
+        settings["remote_action_interval_seconds"],
+    )
 
     try:
         while True:
@@ -1355,7 +1550,27 @@ def main() -> int:
                 "Aguardando %s segundos para o proximo envio.",
                 sleep_seconds,
             )
-            time.sleep(sleep_seconds)
+            wait_until = time.time() + sleep_seconds
+            while time.time() < wait_until:
+                pause_seconds = min(get_remote_action_interval(settings), max(0, wait_until - time.time()))
+                if pause_seconds > 0:
+                    time.sleep(pause_seconds)
+
+                if time.time() < wait_until:
+                    try:
+                        should_exit = poll_remote_action(
+                            session=session,
+                            settings=settings,
+                            sync_state=sync_state,
+                            dry_run=args.dry_run,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logging.debug("Falha inesperada ao consultar acoes remotas: %s", exc)
+                        should_exit = False
+
+                    if should_exit:
+                        update_local_status(sync_state, current_state="updating")
+                        return 0
     except KeyboardInterrupt:
         update_local_status(sync_state, current_state="stopped")
         logging.info("Execucao interrompida pelo usuario.")

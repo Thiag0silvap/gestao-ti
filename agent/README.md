@@ -95,12 +95,14 @@ Exemplo de `.env` para a maquina cliente:
 API_URL=http://SEU-IP:8000/agent/computers/sync
 AGENT_API_KEY=troque-esta-chave
 INTERVAL_SECONDS=300
+REMOTE_ACTION_INTERVAL_SECONDS=20
 REQUEST_TIMEOUT_SECONDS=15
 DEFAULT_SECTOR=TI
 PATRIMONY_NUMBER=
 EQUIPMENT_STATUS=Ativo
 AGENT_NOTES=Cadastro automatico pelo agente
 VERIFY_SSL=true
+PREFERRED_IP_PREFIXES=
 ```
 
 Teste do executavel:
@@ -131,7 +133,8 @@ cd agent
 powershell -ExecutionPolicy Bypass -File .\install_startup.ps1
 ```
 
-Isso cria uma tarefa chamada `GestaoTI-InventoryAgent` para iniciar no logon e na inicializacao do Windows.
+Isso cria uma tarefa chamada `GestaoTI-InventoryAgent` para iniciar com o Windows como `SYSTEM`.
+O instalador tambem inicia a tarefa imediatamente para validar o agente sem precisar reiniciar a maquina.
 
 Se preferir usar o Python do `.venv` em vez do executavel:
 
@@ -154,7 +157,10 @@ agent\logs\inventory_agent.log
 ## Observacoes
 
 - O agente tenta usar `wmic` e faz fallback para `Get-CimInstance` quando necessario.
+- O agente escolhe IP e MAC pela mesma interface de rede, evitando VPNs, adaptadores virtuais e APIPA.
+- Se houver mais de uma rede valida, use `PREFERRED_IP_PREFIXES=168.190.,10.0.` para priorizar a rede interna.
 - `INTERVAL_SECONDS` minimo aceito: `30`.
+- `REMOTE_ACTION_INTERVAL_SECONDS` minimo aceito: `10`; controla a checagem leve de comandos remotos.
 - `REQUEST_TIMEOUT_SECONDS` minimo aceito: `5`.
 - Se a API usar HTTPS com certificado interno temporariamente, voce pode testar com `VERIFY_SSL=false`.
 - Para producao, prefira manter `VERIFY_SSL=true`.
