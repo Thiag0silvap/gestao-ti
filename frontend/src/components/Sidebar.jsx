@@ -1,5 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 
+import { getStoredUser } from "../services/sessionService";
+
 const menu = [
   {
     name: "Dashboard",
@@ -47,8 +49,7 @@ const menu = [
 
 function Sidebar({ isOpen, onClose }) {
   const location = useLocation();
-  const userRaw = localStorage.getItem("user");
-  const user = userRaw ? JSON.parse(userRaw) : null;
+  const user = getStoredUser();
 
   const filteredMenu = menu.filter((item) => (user ? item.roles.includes(user.role) : false));
 
@@ -72,7 +73,7 @@ function Sidebar({ isOpen, onClose }) {
               Monitoramento
             </p>
             <h2 className="mt-2 font-[var(--font-display)] text-[1.9rem] font-semibold">
-              Atlas TI
+              Atlas
             </h2>
             <p className="mt-2 text-sm leading-6 text-emerald-50/70">
               Inventário, alertas e operação em um painel mais leve para a equipe.

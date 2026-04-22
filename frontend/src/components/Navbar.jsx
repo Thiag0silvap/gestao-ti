@@ -59,7 +59,7 @@ function Navbar({ onOpenSidebar }) {
 
     return (
       titles[location.pathname] || {
-        title: "Atlas TI",
+        title: "Atlas",
         subtitle: "Painel central do ambiente de suporte, inventário e monitoramento.",
       }
     );
@@ -86,7 +86,7 @@ function Navbar({ onOpenSidebar }) {
 
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-              Atlas TI
+              Atlas
             </p>
             <h1 className="mt-2 font-[var(--font-display)] text-[1.95rem] font-semibold text-slate-900 md:text-[2.2rem]">
               {pageMeta.title}

@@ -1,11 +1,14 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
-const UIContext = createContext(null);
+import { UIContext } from "./UIContext";
 
 function UIProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
+  const [promptState, setPromptState] = useState(null);
+  const [promptValue, setPromptValue] = useState("");
   const confirmResolverRef = useRef(null);
+  const promptResolverRef = useRef(null);
 
   const dismissToast = useCallback((id) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
@@ -24,11 +27,25 @@ function UIProvider({ children }) {
     return new Promise((resolve) => {
       confirmResolverRef.current = resolve;
       setConfirmState({
-        title: options.title || "Confirmar acao",
+        title: options.title || "Confirmar ação",
         message: options.message || "Deseja continuar?",
         confirmLabel: options.confirmLabel || "Confirmar",
         cancelLabel: options.cancelLabel || "Cancelar",
         tone: options.tone || "default",
+      });
+    });
+  }, []);
+
+  const prompt = useCallback((options) => {
+    return new Promise((resolve) => {
+      promptResolverRef.current = resolve;
+      setPromptValue(options.initialValue || "");
+      setPromptState({
+        title: options.title || "Informar motivo",
+        message: options.message || "Digite uma justificativa para continuar.",
+        confirmLabel: options.confirmLabel || "Continuar",
+        cancelLabel: options.cancelLabel || "Cancelar",
+        placeholder: options.placeholder || "Descreva o motivo",
       });
     });
   }, []);
@@ -41,7 +58,16 @@ function UIProvider({ children }) {
     setConfirmState(null);
   }, []);
 
-  const value = useMemo(() => ({ notify, confirm }), [notify, confirm]);
+  const closePrompt = useCallback((result) => {
+    if (promptResolverRef.current) {
+      promptResolverRef.current(result);
+      promptResolverRef.current = null;
+    }
+    setPromptState(null);
+    setPromptValue("");
+  }, []);
+
+  const value = useMemo(() => ({ notify, confirm, prompt }), [notify, confirm, prompt]);
 
   return (
     <UIContext.Provider value={value}>
@@ -76,7 +102,7 @@ function UIProvider({ children }) {
       {confirmState && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[30px] border border-white/40 bg-white/92 p-6 shadow-[0_24px_70px_rgba(15,23,42,0.24)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Confirmacao</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Confirmação</p>
             <h3 className="mt-3 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
               {confirmState.title}
             </h3>
@@ -97,18 +123,43 @@ function UIProvider({ children }) {
           </div>
         </div>
       )}
+
+      {promptState && (
+        <div className="fixed inset-0 z-[101] flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-[30px] border border-white/40 bg-white/92 p-6 shadow-[0_24px_70px_rgba(15,23,42,0.24)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Justificativa</p>
+            <h3 className="mt-3 font-[var(--font-display)] text-3xl font-semibold text-slate-900">
+              {promptState.title}
+            </h3>
+            <p className="mt-4 text-sm leading-6 text-slate-600">{promptState.message}</p>
+
+            <textarea
+              value={promptValue}
+              onChange={(event) => setPromptValue(event.target.value)}
+              rows={4}
+              placeholder={promptState.placeholder}
+              className="field-input mt-5 min-h-28"
+              autoFocus
+            />
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button type="button" onClick={() => closePrompt(null)} className="btn-secondary">
+                {promptState.cancelLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => closePrompt(promptValue.trim())}
+                className="btn-primary"
+                disabled={!promptValue.trim()}
+              >
+                {promptState.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </UIContext.Provider>
   );
-}
-
-export function useUI() {
-  const context = useContext(UIContext);
-
-  if (!context) {
-    throw new Error("useUI must be used within UIProvider");
-  }
-
-  return context;
 }
 
 export default UIProvider;

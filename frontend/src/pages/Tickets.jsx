@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 
 import api from "../api/api";
 import TableControls from "../components/TableControls";
-import { useUI } from "../components/UIProvider";
+import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
+import { getStoredUser } from "../services/sessionService";
 
 const initialForm = {
   title: "",
@@ -28,7 +29,7 @@ function Tickets() {
   const [priorityFilter, setPriorityFilter] = useState("");
 
   const navigate = useNavigate();
-  const currentUser = JSON.parse(localStorage.getItem("user"));
+  const currentUser = getStoredUser();
   const { notify, confirm } = useUI();
 
   const upsertTicket = useCallback((ticketData) => {
@@ -41,7 +42,7 @@ function Tickets() {
     });
   }, []);
 
-  const handleAuthError = (error, defaultMessage) => {
+  const handleAuthError = useCallback((error, defaultMessage) => {
     console.error(error);
 
     if (error.response?.status === 401) {
@@ -52,14 +53,14 @@ function Tickets() {
     }
 
     notify(defaultMessage, "error");
-  };
+  }, [navigate, notify]);
 
   const loadTickets = useCallback(() => {
     api
       .get("/tickets")
       .then((response) => setTickets(response.data))
       .catch((error) => handleAuthError(error, "Erro ao carregar chamados"));
-  }, [navigate, notify]);
+  }, [handleAuthError]);
 
   const loadComputers = useCallback(() => {
     api
@@ -179,7 +180,7 @@ function Tickets() {
   const handleDelete = async (ticketId) => {
     const confirmed = await confirm({
       title: "Excluir chamado",
-      message: "Deseja realmente excluir este chamado? Esta acao nao pode ser desfeita.",
+      message: "Deseja realmente excluir este chamado? Esta ação não pode ser desfeita.",
       confirmLabel: "Excluir",
       cancelLabel: "Cancelar",
       tone: "danger",
@@ -189,7 +190,7 @@ function Tickets() {
     try {
       await api.delete(`/tickets/${ticketId}`);
       setTickets((current) => current.filter((ticket) => ticket.id !== ticketId));
-      notify("Chamado excluido com sucesso!", "success");
+      notify("Chamado excluído com sucesso!", "success");
 
       if (editingId === ticketId) {
         resetForm();
@@ -243,10 +244,10 @@ function Tickets() {
             Fluxo de suporte
           </p>
           <h2 className="page-title mt-3 text-3xl md:text-[2.6rem]">
-            Registre, acompanhe e distribua chamados com mais contexto tecnico.
+            Registre, acompanhe e distribua chamados com mais contexto técnico.
           </h2>
           <p className="page-subtitle">
-            Conecte o atendimento ao equipamento, setor e responsavel para acelerar o suporte.
+            Conecte o atendimento ao equipamento, setor e responsável para acelerar o suporte.
           </p>
         </div>
 
@@ -285,7 +286,7 @@ function Tickets() {
 
         <form onSubmit={handleSubmit} className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <div>
-            <label className="field-label">Titulo</label>
+            <label className="field-label">Título</label>
             <input type="text" name="title" value={form.title} onChange={handleChange} className="field-input" required />
           </div>
 
@@ -325,9 +326,9 @@ function Tickets() {
 
               {currentUser?.role === "admin" && (
                 <div>
-                  <label className="field-label">Responsavel</label>
+                  <label className="field-label">Responsável</label>
                   <select name="assigned_to_id" value={form.assigned_to_id} onChange={handleChange} className="field-input">
-                    <option value="">Nenhum responsavel</option>
+                    <option value="">Nenhum responsável</option>
                     {users.map((user) => (
                       <option key={user.id} value={user.id}>
                         {user.name}
@@ -345,18 +346,18 @@ function Tickets() {
           )}
 
           <div className="md:col-span-2 xl:col-span-3">
-            <label className="field-label">Descricao</label>
+            <label className="field-label">Descrição</label>
             <textarea name="description" value={form.description} onChange={handleChange} rows="4" className="field-input" required />
           </div>
 
           <div className="flex flex-wrap gap-3 md:col-span-2 xl:col-span-3">
             <button type="submit" className="btn-primary">
-              {editingId ? "Salvar alteracoes" : "Abrir chamado"}
+              {editingId ? "Salvar alterações" : "Abrir chamado"}
             </button>
 
             {editingId && (
               <button type="button" onClick={resetForm} className="btn-secondary">
-                Cancelar edicao
+                Cancelar edição
               </button>
             )}
           </div>
@@ -365,7 +366,7 @@ function Tickets() {
 
       <section className="section-card">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <input type="text" placeholder="Titulo, descricao, solicitante ou computador" value={search} onChange={(e) => setSearch(e.target.value)} className="field-input" />
+          <input type="text" placeholder="Título, descrição, solicitante ou computador" value={search} onChange={(e) => setSearch(e.target.value)} className="field-input" />
 
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="field-input">
             <option value="">Todos os status</option>
@@ -400,14 +401,14 @@ function Tickets() {
         <table>
           <thead>
             <tr>
-              <th><button type="button" onClick={() => requestSort("title")} className="table-sort-button">Titulo <span className="table-sort-indicator">{getSortIndicator("title")}</span></button></th>
+              <th><button type="button" onClick={() => requestSort("title")} className="table-sort-button">Título <span className="table-sort-indicator">{getSortIndicator("title")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("sector")} className="table-sort-button">Setor <span className="table-sort-indicator">{getSortIndicator("sector")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("computer_hostname")} className="table-sort-button">Computador <span className="table-sort-indicator">{getSortIndicator("computer_hostname")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("status")} className="table-sort-button">Status <span className="table-sort-indicator">{getSortIndicator("status")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("priority")} className="table-sort-button">Prioridade <span className="table-sort-indicator">{getSortIndicator("priority")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("requester_name")} className="table-sort-button">Solicitante <span className="table-sort-indicator">{getSortIndicator("requester_name")}</span></button></th>
-              <th><button type="button" onClick={() => requestSort("assigned_to_name")} className="table-sort-button">Responsavel <span className="table-sort-indicator">{getSortIndicator("assigned_to_name")}</span></button></th>
-              <th>Acoes</th>
+              <th><button type="button" onClick={() => requestSort("assigned_to_name")} className="table-sort-button">Responsável <span className="table-sort-indicator">{getSortIndicator("assigned_to_name")}</span></button></th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>

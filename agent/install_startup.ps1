@@ -57,6 +57,25 @@ if ($arguments) {
     $actionParams.Argument = $arguments
 }
 
+if (-not (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue)) {
+    Write-Step "Cmdlets modernos de tarefa agendada nao encontrados. Usando modo compativel com Windows 7."
+
+    $taskCommand = "`"$execute`""
+    if ($arguments) {
+        $taskCommand = "$taskCommand $arguments"
+    }
+
+    schtasks.exe /Create /TN $TaskName /TR $taskCommand /SC ONLOGON /F | Out-Null
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha ao registrar tarefa agendada pelo schtasks.exe"
+    }
+
+    Write-Step "Tarefa agendada registrada com sucesso: $TaskName"
+    Write-Step "Modo Windows 7: tarefa criada para executar no logon do usuario."
+    exit 0
+}
+
 $action = New-ScheduledTaskAction @actionParams
 $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
 $triggerStartup = New-ScheduledTaskTrigger -AtStartup

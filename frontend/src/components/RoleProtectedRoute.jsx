@@ -1,14 +1,13 @@
 import { Navigate } from "react-router-dom";
 import { hasRequiredRole } from "../services/roleService";
+import { getStoredUser } from "../services/sessionService";
 
 function RoleProtectedRoute({ children, allowedRoles }) {
-  const userRaw = localStorage.getItem("user");
+  const user = getStoredUser();
 
-  if (!userRaw) {
+  if (!user) {
     return <Navigate to="/" replace />;
   }
-
-  const user = JSON.parse(userRaw);
 
   if (!hasRequiredRole(user.role, allowedRoles)) {
     return <Navigate to="/dashboard" replace />;

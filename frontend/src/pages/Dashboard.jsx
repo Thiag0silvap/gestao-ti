@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import api from "../api/api";
-import { useUI } from "../components/UIProvider";
+import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 
 function Dashboard() {
@@ -48,9 +48,9 @@ function Dashboard() {
       },
       {
         title: "Offline",
-        value: data.offline_recently,
+        value: data.offline_hosts,
         tone: "text-rose-700",
-        description: "Equipamentos sem atividade recente",
+        description: "Equipamentos sem contato nas ultimas 24 horas",
       },
       {
         title: "Ativos cadastrados",
@@ -98,6 +98,43 @@ function Dashboard() {
       { label: "CPU alta", value: data.hosts_with_high_cpu },
       { label: "Disco crítico", value: data.hosts_with_low_disk },
       { label: "Offline", value: data.offline_hosts },
+    ];
+  }, [data]);
+
+  const agentHealthCards = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+
+    return [
+      {
+        title: "Fila offline",
+        value: data.agent_offline_queue_hosts ?? 0,
+        detail: `${data.agent_offline_queue_items ?? 0} item(ns) aguardando reenvio`,
+        tone: "text-amber-800",
+        className: "border-amber-200 bg-amber-50/90",
+      },
+      {
+        title: "Agentes com falha",
+        value: data.agent_failure_hosts ?? 0,
+        detail: "Máquinas com erro ou falhas consecutivas no agente",
+        tone: "text-rose-800",
+        className: "border-rose-200 bg-rose-50/90",
+      },
+      {
+        title: "Atualizando",
+        value: data.agent_updating_hosts ?? 0,
+        detail: "Agentes executando troca remota de versao",
+        tone: "text-sky-800",
+        className: "border-sky-200 bg-sky-50/90",
+      },
+      {
+        title: "Sem telemetria",
+        value: data.agent_without_telemetry ?? 0,
+        detail: "Máquinas que ainda não enviaram dados do agente novo",
+        tone: "text-slate-800",
+        className: "border-slate-200 bg-slate-50/90",
+      },
     ];
   }, [data]);
 
@@ -205,6 +242,18 @@ function Dashboard() {
                 Média de ativos cadastrados por máquina inventariada.
               </p>
             </div>
+
+            {agentHealthCards.map((card) => (
+              <div key={card.title} className={`rounded-[24px] border p-5 ${card.className}`}>
+                <p className={`text-sm font-semibold ${card.tone}`}>{card.title}</p>
+                <p className={`mt-2 text-3xl font-semibold ${card.tone}`}>
+                  {card.value}
+                </p>
+                <p className="mt-2 text-sm text-slate-600">
+                  {card.detail}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </section>

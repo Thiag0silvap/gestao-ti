@@ -1,17 +1,38 @@
-import { useCallback, useMemo, useState } from "react";
+﻿import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import api from "../api/api";
 import TableControls from "../components/TableControls";
-import { useUI } from "../components/UIProvider";
+import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
 import { classifyHostSeverity, severityClassName, severityLabel } from "../utils/hostSeverity";
+
+function getAgentOperationalBadge(computer) {
+  if ((computer.agent_offline_queue_size ?? 0) > 0) {
+    return { label: `Fila ${computer.agent_offline_queue_size}`, className: "status-warning" };
+  }
+
+  if ((computer.agent_consecutive_failures ?? 0) > 0 || computer.agent_last_error_message) {
+    return { label: "Agente com falha", className: "status-critical" };
+  }
+
+  if ((computer.agent_state || "").toLowerCase() === "updating") {
+    return { label: "Atualizando", className: "status-warning" };
+  }
+
+  if (computer.agent_version || computer.agent_id) {
+    return { label: "Agente ok", className: "status-online" };
+  }
+
+  return { label: "Sem telemetria", className: "status-neutral" };
+}
 
 function Computers() {
   const [computers, setComputers] = useState([]);
   const [search, setSearch] = useState("");
   const [sectorFilter, setSectorFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const navigate = useNavigate();
   const { notify } = useUI();
 
@@ -55,13 +76,15 @@ function Computers() {
         computer.hostname?.toLowerCase().includes(searchText) ||
         computer.user?.toLowerCase().includes(searchText) ||
         computer.ip_address?.toLowerCase().includes(searchText) ||
-        computer.serial_number?.toLowerCase().includes(searchText);
+        computer.serial_number?.toLowerCase().includes(searchText) ||
+        computer.agent_id?.toLowerCase().includes(searchText);
 
       const matchesSector = !sectorFilter || computer.sector === sectorFilter;
+      const matchesStatus = !statusFilter || classifyHostSeverity(computer) === statusFilter;
 
-      return matchesSearch && matchesSector;
+      return matchesSearch && matchesSector && matchesStatus;
     });
-  }, [computers, search, sectorFilter]);
+  }, [computers, search, sectorFilter, statusFilter]);
 
   const severitySummary = useMemo(() => (
     filteredComputers.reduce((summary, computer) => {
@@ -69,6 +92,18 @@ function Computers() {
       summary[severity] += 1;
       return summary;
     }, { healthy: 0, warning: 0, critical: 0, offline: 0 })
+  ), [filteredComputers]);
+
+  const agentSummary = useMemo(() => (
+    filteredComputers.reduce((summary, computer) => {
+      if ((computer.agent_offline_queue_size ?? 0) > 0) {
+        summary.offlineQueue += 1;
+      }
+      if ((computer.agent_consecutive_failures ?? 0) > 0 || computer.agent_last_error_message) {
+        summary.failures += 1;
+      }
+      return summary;
+    }, { offlineQueue: 0, failures: 0 })
   ), [filteredComputers]);
 
   const {
@@ -114,43 +149,55 @@ function Computers() {
         </div>
 
         <div className="section-card bg-[linear-gradient(180deg,rgba(255,255,255,0.88)_0%,rgba(243,248,245,0.92)_100%)]">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
                 Total filtrado
               </p>
               <p className="mt-3 text-3xl font-semibold text-slate-900">{filteredComputers.length}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
                 Saudáveis
               </p>
               <p className="mt-3 text-3xl font-semibold text-emerald-700">{severitySummary.healthy}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
                 Atenção
               </p>
               <p className="mt-3 text-3xl font-semibold text-amber-700">{severitySummary.warning}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
                 Críticos
               </p>
               <p className="mt-3 text-3xl font-semibold text-rose-700">{severitySummary.critical}</p>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
                 Offline
               </p>
               <p className="mt-3 text-3xl font-semibold text-slate-700">{severitySummary.offline}</p>
+            </div>
+            <div>
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
+                Fila offline
+              </p>
+              <p className="mt-3 text-3xl font-semibold text-amber-700">{agentSummary.offlineQueue}</p>
+            </div>
+            <div>
+              <p className="min-h-8 text-[0.67rem] font-semibold uppercase leading-4 tracking-[0.11em] text-slate-500">
+                Agentes com falha
+              </p>
+              <p className="mt-3 text-3xl font-semibold text-rose-700">{agentSummary.failures}</p>
             </div>
           </div>
         </div>
       </section>
 
       <section className="section-card">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <div>
             <label className="field-label">Buscar</label>
             <input
@@ -178,11 +225,27 @@ function Computers() {
             </select>
           </div>
 
+          <div>
+            <label className="field-label">Status</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="field-input"
+            >
+              <option value="">Todos os status</option>
+              <option value="healthy">Saudável</option>
+              <option value="warning">Atenção</option>
+              <option value="critical">Crítico</option>
+              <option value="offline">Offline</option>
+            </select>
+          </div>
+
           <div className="flex items-end">
             <button
               onClick={() => {
                 setSearch("");
                 setSectorFilter("");
+                setStatusFilter("");
               }}
               className="btn-secondary w-full"
             >
@@ -213,16 +276,24 @@ function Computers() {
                 </td>
               </tr>
             ) : (
-              paginatedItems.map((computer) => (
+              paginatedItems.map((computer) => {
+                const agentBadge = getAgentOperationalBadge(computer);
+
+                return (
                 <tr key={computer.id}>
                   <td>
                     <div className="flex flex-col gap-1">
                       <Link to={`/computers/${computer.id}`} className="font-semibold text-emerald-700 hover:underline">
                         {computer.hostname}
                       </Link>
-                      <span className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                        {computer.serial_number || "Sem serial"}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                          {computer.serial_number || "Sem serial"}
+                        </span>
+                        <span className={agentBadge.className}>
+                          {agentBadge.label}
+                        </span>
+                      </div>
                     </div>
                   </td>
                   <td>{computer.user || "-"}</td>
@@ -241,7 +312,7 @@ function Computers() {
                   </td>
                   <td>{formatDateTime(computer.last_seen)}</td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>

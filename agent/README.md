@@ -69,6 +69,19 @@ agent\dist\InventoryAgent.exe
 
 O build atual gera o agente sem console, pensado para rodar em segundo plano no Windows.
 
+### Build legado para Windows 7
+
+Windows 7 nao executa builds geradas com Python moderno, como Python 3.13. Para maquinas
+Windows 7, gere uma build separada com Python 3.8.10:
+
+```powershell
+build_exe_win7.bat
+```
+
+Esse script usa `requirements-win7.txt`, cria o ambiente `.venv-win7` e empacota o agente com
+dependencias mais antigas. O instalador tambem possui fallback por `schtasks.exe`, pois os cmdlets
+`New-ScheduledTask*` nao existem no PowerShell antigo do Windows 7.
+
 Para distribuir em outra maquina, envie:
 
 - `InventoryAgent.exe`

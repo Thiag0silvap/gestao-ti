@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from pydantic import BaseModel
 
+from app.schemas.computer_printer import ComputerPrinterCreate
+
 
 class ComputerBase(BaseModel):
     hostname: str
@@ -25,6 +27,19 @@ class ComputerBase(BaseModel):
     manufacturer: str | None = None
     model: str | None = None
     equipment_status: str | None = None
+    agent_id: str | None = None
+    agent_state: str | None = None
+    agent_version: str | None = None
+    agent_started_at: datetime | None = None
+    agent_last_attempt_at: datetime | None = None
+    agent_last_success_at: datetime | None = None
+    agent_last_error_at: datetime | None = None
+    agent_last_error_message: str | None = None
+    agent_consecutive_failures: int | None = None
+    agent_offline_queue_size: int | None = None
+    collected_at: datetime | None = None
+    sync_attempt: int | None = None
+    printers: list[ComputerPrinterCreate] | None = None
     last_maintenance_date: date | None = None
     notes: str | None = None
 

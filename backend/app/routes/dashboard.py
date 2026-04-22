@@ -7,6 +7,7 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.asset import Asset
 from app.models.computer import Computer
+from app.models.computer_printer import ComputerPrinter
 from app.models.operational_event import OperationalEvent
 from app.models.system_metric import SystemMetric
 from app.models.user import User
@@ -37,7 +38,7 @@ def dashboard_summary(
     monitors = db.query(Asset).filter(Asset.asset_type == "Monitor").count()
     nobreaks = db.query(Asset).filter(Asset.asset_type == "Nobreak").count()
     stabilizers = db.query(Asset).filter(Asset.asset_type == "Estabilizador").count()
-    printers = db.query(Asset).filter(Asset.asset_type == "Impressora").count()
+    printers = db.query(ComputerPrinter).count()
 
     latest_metrics = {}
     metrics = (
@@ -77,11 +78,18 @@ def dashboard_summary(
     warning_hosts = 0
     critical_hosts = 0
     offline_hosts = 0
+    agent_offline_queue_hosts = 0
+    agent_offline_queue_items = 0
+    agent_failure_hosts = 0
+    agent_updating_hosts = 0
+    agent_without_telemetry = 0
     risky_hosts = []
 
     computers = db.query(Computer).all()
     for computer in computers:
         severity = classify_computer_severity(computer)
+        agent_queue_size = computer.agent_offline_queue_size or 0
+        agent_state = (computer.agent_state or "").lower()
 
         if severity == "healthy":
             healthy_hosts += 1
@@ -91,6 +99,19 @@ def dashboard_summary(
             critical_hosts += 1
         else:
             offline_hosts += 1
+
+        if agent_queue_size > 0:
+            agent_offline_queue_hosts += 1
+            agent_offline_queue_items += agent_queue_size
+
+        if (computer.agent_consecutive_failures or 0) > 0 or computer.agent_last_error_message:
+            agent_failure_hosts += 1
+
+        if agent_state == "updating":
+            agent_updating_hosts += 1
+
+        if not computer.agent_id and not computer.agent_version:
+            agent_without_telemetry += 1
 
         if severity in {"warning", "critical", "offline"}:
             risky_hosts.append({
@@ -127,6 +148,11 @@ def dashboard_summary(
         "warning_hosts": warning_hosts,
         "critical_hosts": critical_hosts,
         "offline_hosts": offline_hosts,
+        "agent_offline_queue_hosts": agent_offline_queue_hosts,
+        "agent_offline_queue_items": agent_offline_queue_items,
+        "agent_failure_hosts": agent_failure_hosts,
+        "agent_updating_hosts": agent_updating_hosts,
+        "agent_without_telemetry": agent_without_telemetry,
         "top_risky_hosts": risky_hosts[:5],
         "recent_events": [
             {

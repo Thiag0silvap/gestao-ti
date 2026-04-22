@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import api from "../api/api";
 import TableControls from "../components/TableControls";
-import { useUI } from "../components/UIProvider";
+import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
 
@@ -41,7 +41,7 @@ function Assets() {
     });
   }, []);
 
-  const handleAuthError = (error, defaultMessage) => {
+  const handleAuthError = useCallback((error, defaultMessage) => {
     console.error(error);
 
     if (error.response?.status === 401) {
@@ -52,21 +52,21 @@ function Assets() {
     }
 
     notify(defaultMessage, "error");
-  };
+  }, [navigate, notify]);
 
   const loadAssets = useCallback(() => {
     api
       .get("/assets")
       .then((response) => setAssets(response.data))
       .catch((error) => handleAuthError(error, "Erro ao carregar ativos"));
-  }, [navigate, notify]);
+  }, [handleAuthError]);
 
   const loadComputers = useCallback(() => {
     api
       .get("/computers")
       .then((response) => setComputers(response.data))
       .catch((error) => handleAuthError(error, "Erro ao carregar computadores"));
-  }, [navigate, notify]);
+  }, [handleAuthError]);
 
   const refreshPage = useCallback(() => {
     loadAssets();
@@ -189,7 +189,7 @@ function Assets() {
   const handleDelete = async (assetId) => {
     const confirmed = await confirm({
       title: "Excluir ativo",
-      message: "Deseja realmente excluir este ativo? Esta acao nao pode ser desfeita.",
+      message: "Deseja realmente excluir este ativo? Esta ação não pode ser desfeita.",
       confirmLabel: "Excluir",
       cancelLabel: "Cancelar",
       tone: "danger",
@@ -200,7 +200,7 @@ function Assets() {
     try {
       await api.delete(`/assets/${assetId}`);
       setAssets((current) => current.filter((asset) => asset.id !== assetId));
-      notify("Ativo excluido com sucesso!", "success");
+      notify("Ativo excluído com sucesso!", "success");
 
       if (editingId === assetId) {
         resetForm();
@@ -240,10 +240,10 @@ function Assets() {
             Patrimonio operacional
           </p>
           <h2 className="page-title mt-3 text-3xl md:text-[2.6rem]">
-            Organize perifericos e equipamentos vinculados ao inventario.
+            Organize periféricos e equipamentos vinculados ao inventário.
           </h2>
           <p className="page-subtitle">
-            Centralize os ativos por tipo, setor, patrimonio e situacao para melhorar rastreabilidade.
+            Centralize os ativos por tipo, setor, patrimônio e situação para melhorar rastreabilidade.
           </p>
         </div>
 
@@ -274,7 +274,7 @@ function Assets() {
             </h3>
           </div>
           <p className="text-sm text-slate-500">
-            Vincule ao computador sempre que o item fizer parte da estacao.
+            Vincule ao computador sempre que o item fizer parte da estação.
           </p>
         </div>
 
@@ -337,12 +337,12 @@ function Assets() {
 
           <div className="flex flex-wrap gap-3 md:col-span-2 xl:col-span-3">
             <button type="submit" className="btn-primary">
-              {editingId ? "Salvar alteracoes" : "Cadastrar ativo"}
+              {editingId ? "Salvar alterações" : "Cadastrar ativo"}
             </button>
 
             {editingId && (
               <button type="button" onClick={resetForm} className="btn-secondary">
-                Cancelar edicao
+                Cancelar edição
               </button>
             )}
           </div>
@@ -353,7 +353,7 @@ function Assets() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <div>
             <label className="field-label">Buscar</label>
-            <input type="text" placeholder="Tipo, patrimonio, fabricante..." value={search} onChange={(e) => setSearch(e.target.value)} className="field-input" />
+            <input type="text" placeholder="Tipo, patrimônio, fabricante..." value={search} onChange={(e) => setSearch(e.target.value)} className="field-input" />
           </div>
 
           <div>
@@ -406,7 +406,7 @@ function Assets() {
               <th><button type="button" onClick={() => requestSort("model")} className="table-sort-button">Modelo <span className="table-sort-indicator">{getSortIndicator("model")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("asset_status")} className="table-sort-button">Status <span className="table-sort-indicator">{getSortIndicator("asset_status")}</span></button></th>
               <th><button type="button" onClick={() => requestSort("sector")} className="table-sort-button">Setor <span className="table-sort-indicator">{getSortIndicator("sector")}</span></button></th>
-              <th>Acoes</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>

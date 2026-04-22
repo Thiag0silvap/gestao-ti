@@ -55,7 +55,7 @@ function Login() {
               Plataforma operacional
             </p>
             <h1 className="mt-5 font-[var(--font-display)] text-[3.2rem] font-semibold leading-[1.05] text-slate-900 md:text-[4.1rem]">
-              Atlas TI mantém o inventário vivo e o suporte centralizado.
+              Atlas mantém o inventário vivo e o suporte centralizado.
             </h1>
             <p className="mt-6 text-lg leading-8 text-slate-700">
               Consolide computadores, ativos, chamados e usuários em um painel mais

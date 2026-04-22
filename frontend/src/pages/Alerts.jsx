@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import api from "../api/api";
-import { useUI } from "../components/UIProvider";
+import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import { severityClassName, severityLabel } from "../utils/hostSeverity";
 

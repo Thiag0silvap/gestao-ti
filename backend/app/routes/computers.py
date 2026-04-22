@@ -7,6 +7,7 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.asset import Asset
 from app.models.computer import Computer
+from app.models.computer_printer import ComputerPrinter
 from app.models.operational_event import OperationalEvent
 from app.models.system_metric import SystemMetric
 from app.models.user import User
@@ -29,7 +30,7 @@ def create_or_update_computer(
         ).first()
 
     if computer:
-        for key, value in data.model_dump().items():
+        for key, value in data.model_dump(exclude={"printers"}).items():
             setattr(computer, key, value)
 
         computer.last_seen = datetime.now()
@@ -42,7 +43,7 @@ def create_or_update_computer(
             "computer": computer
         }
 
-    new_computer = Computer(**data.model_dump())
+    new_computer = Computer(**data.model_dump(exclude={"printers"}))
     new_computer.last_seen = datetime.now()
 
     db.add(new_computer)
@@ -96,6 +97,25 @@ def get_computer_assets(
 
     assets = db.query(Asset).filter(Asset.computer_id == computer_id).all()
     return assets
+
+
+@router.get("/computers/{computer_id}/printers")
+def get_computer_printers(
+    computer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+
+    if not computer:
+        raise HTTPException(status_code=404, detail="Computador nao encontrado")
+
+    return (
+        db.query(ComputerPrinter)
+        .filter(ComputerPrinter.computer_id == computer_id)
+        .order_by(ComputerPrinter.is_default.desc(), ComputerPrinter.name.asc())
+        .all()
+    )
 
 
 @router.get("/computers/{computer_id}/metrics")
@@ -181,7 +201,7 @@ def update_computer(
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
-    for key, value in data.model_dump().items():
+    for key, value in data.model_dump(exclude={"printers"}).items():
         setattr(computer, key, value)
 
     db.commit()

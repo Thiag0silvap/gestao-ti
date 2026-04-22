@@ -24,9 +24,9 @@ function TableControls({
           onChange={(e) => setPageSize(Number(e.target.value))}
           className="rounded-2xl border border-slate-200 bg-white/90 px-3 py-2 text-sm text-slate-700"
         >
-          <option value={10}>10 por pagina</option>
-          <option value={20}>20 por pagina</option>
-          <option value={50}>50 por pagina</option>
+          <option value={10}>10 por página</option>
+          <option value={20}>20 por página</option>
+          <option value={50}>50 por página</option>
         </select>
 
         <div className="flex items-center gap-2">
@@ -34,10 +34,10 @@ function TableControls({
             Anterior
           </button>
           <span className="text-sm text-slate-600">
-            Pagina {page} de {totalPages}
+            Página {page} de {totalPages}
           </span>
           <button type="button" onClick={() => setPage(page + 1)} disabled={page >= totalPages} className="btn-secondary px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">
-            Proxima
+            Próxima
           </button>
         </div>
       </div>

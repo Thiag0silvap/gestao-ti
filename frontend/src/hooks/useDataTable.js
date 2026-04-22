@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 function normalizeValue(value) {
   if (value === null || value === undefined || value === "") {
@@ -25,7 +25,7 @@ export function useDataTable(items, options = {}) {
   } = options;
 
   const [sortConfig, setSortConfig] = useState(initialSort);
-  const [page, setPage] = useState(1);
+  const [rawPage, setRawPage] = useState(1);
   const [pageSize, setPageSize] = useState(initialPageSize);
 
   const sortedItems = useMemo(() => {
@@ -52,16 +52,19 @@ export function useDataTable(items, options = {}) {
   }, [accessors, items, sortConfig]);
 
   const totalPages = Math.max(1, Math.ceil(sortedItems.length / pageSize));
+  const page = Math.min(rawPage, totalPages);
 
-  useEffect(() => {
-    setPage(1);
-  }, [items.length, pageSize, sortConfig]);
+  const setPage = (nextPage) => {
+    setRawPage(() => {
+      const value = typeof nextPage === "function" ? nextPage(page) : nextPage;
+      return Math.min(Math.max(1, value), totalPages);
+    });
+  };
 
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
+  const updatePageSize = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    setRawPage(1);
+  };
 
   const paginatedItems = useMemo(() => {
     const start = (page - 1) * pageSize;
@@ -69,6 +72,7 @@ export function useDataTable(items, options = {}) {
   }, [page, pageSize, sortedItems]);
 
   const requestSort = (key) => {
+    setRawPage(1);
     setSortConfig((current) => {
       if (!current || current.key !== key) {
         return { key, direction: "asc" };
@@ -87,7 +91,7 @@ export function useDataTable(items, options = {}) {
     page,
     setPage,
     pageSize,
-    setPageSize,
+    setPageSize: updatePageSize,
     totalPages,
     totalItems: sortedItems.length,
     paginatedItems,

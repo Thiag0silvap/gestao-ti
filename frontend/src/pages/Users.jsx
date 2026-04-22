@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 
 import api from "../api/api";
 import TableControls from "../components/TableControls";
-import { useUI } from "../components/UIProvider";
+import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
+import { getStoredUser } from "../services/sessionService";
 
 const initialForm = {
   name: "",
@@ -24,7 +25,7 @@ function Users() {
   const [roleFilter, setRoleFilter] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
-  const currentUser = JSON.parse(localStorage.getItem("user"));
+  const currentUser = getStoredUser();
   const { notify, confirm } = useUI();
 
   const upsertUser = useCallback((userData) => {
@@ -374,7 +375,7 @@ function Users() {
           setPage={setPage}
           setPageSize={setPageSize}
           totalItems={totalItems}
-          itemLabel="usuarios"
+          itemLabel="usuários"
         />
       </section>
     </div>

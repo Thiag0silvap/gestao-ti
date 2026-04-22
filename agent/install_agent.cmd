@@ -10,7 +10,7 @@ if not exist ".env" (
 )
 
 set "SECTOR_INPUT="
-set /p SECTOR_INPUT=[Agent] Informe o setor desta maquina ^(ex: Financeiro, RH, Comercial, TI^): 
+set /p SECTOR_INPUT=[Agent] Informe o setor desta maquina ^(ex: Financeiro, RH, Comercial, TECNOLOGIA^): 
 
 if not "%SECTOR_INPUT%"=="" (
   powershell -ExecutionPolicy Bypass -Command ^
