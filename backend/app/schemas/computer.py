@@ -55,6 +55,7 @@ class ComputerUpdate(ComputerBase):
 class ComputerResponse(ComputerBase):
     id: int
     last_seen: datetime | None = None
+    health_status: str | None = None
 
     class Config:
         from_attributes = True

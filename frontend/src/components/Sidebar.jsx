@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 
 import { getStoredUser } from "../services/sessionService";
+import { formatSector, normalizeSector } from "../utils/sector";
 
 const menu = [
   {
@@ -95,7 +96,7 @@ function Sidebar({ isOpen, onClose }) {
           </p>
           <p className="mt-2 text-sm text-white/85">{user?.name || "Usuário"}</p>
           <p className="text-sm text-emerald-100/60">
-            {user?.role || "-"} {user?.sector ? `• ${user.sector}` : ""}
+            {user?.role || "-"} {normalizeSector(user?.sector) ? `• ${formatSector(user.sector)}` : ""}
           </p>
         </div>
 

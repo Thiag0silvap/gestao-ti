@@ -1,5 +1,6 @@
 import argparse
 import getpass
+import hashlib
 import ipaddress
 import json
 import logging
@@ -33,7 +34,7 @@ def get_runtime_dir() -> Path:
 RUNTIME_DIR = get_runtime_dir()
 ENV_FILE = RUNTIME_DIR / ".env"
 load_dotenv(ENV_FILE, encoding="utf-8-sig")
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 
 DEFAULT_INTERVAL_SECONDS = 300
 DEFAULT_REMOTE_ACTION_INTERVAL_SECONDS = 20
@@ -1174,20 +1175,39 @@ def poll_remote_action(
 def build_agent_updater_script(current_executable: Path, downloaded_executable: Path) -> Path:
     backup_executable = current_executable.with_suffix(".bak.exe")
     updater_script = current_executable.with_name("agent_updater.cmd")
+    update_log = current_executable.with_name("agent_update.log")
 
     script_content = f"""@echo off
 setlocal
 set "APP={current_executable}"
 set "NEW={downloaded_executable}"
 set "BAK={backup_executable}"
-timeout /t 3 /nobreak >nul
-copy /Y "%APP%" "%BAK%" >nul
-copy /Y "%NEW%" "%APP%" >nul
-if errorlevel 1 (
-  copy /Y "%BAK%" "%APP%" >nul
+set "LOG={update_log}"
+echo [%date% %time%] Iniciando atualizacao do agente.>>"%LOG%"
+timeout /t 5 /nobreak >nul
+
+copy /Y "%APP%" "%BAK%" >>"%LOG%" 2>&1
+if errorlevel 1 echo [%date% %time%] Aviso: nao foi possivel criar backup do executavel atual.>>"%LOG%"
+
+set "UPDATED="
+for /L %%I in (1,1,12) do (
+  copy /Y "%NEW%" "%APP%" >>"%LOG%" 2>&1
+  if not errorlevel 1 (
+    set "UPDATED=1"
+    goto updated
+  )
+  echo [%date% %time%] Tentativa %%I falhou; aguardando processo antigo liberar o arquivo.>>"%LOG%"
+  timeout /t 5 /nobreak >nul
+)
+
+:updated
+if not defined UPDATED (
+  echo [%date% %time%] Falha ao substituir executavel apos varias tentativas.>>"%LOG%"
+  if exist "%BAK%" copy /Y "%BAK%" "%APP%" >>"%LOG%" 2>&1
   exit /b 1
 )
 del /Q "%NEW%" >nul 2>&1
+echo [%date% %time%] Executavel atualizado. Reiniciando agente.>>"%LOG%"
 start "" "%APP%"
 del /Q "%~f0" >nul 2>&1
 """
@@ -1210,6 +1230,15 @@ def start_agent_updater(updater_script: Path) -> None:
     )
 
 
+def compute_file_sha256(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with file_path.open("rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+            if chunk:
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def execute_agent_update(
     session: requests.Session,
     settings: dict,
@@ -1223,6 +1252,7 @@ def execute_agent_update(
 
     target_version = (action_payload.get("version") or "").strip()
     download_url = (action_payload.get("download_url") or "").strip()
+    expected_sha256 = (action_payload.get("sha256") or "").strip().lower()
     if not target_version or not download_url:
         return False, "Payload de atualizacao incompleto.", False
 
@@ -1250,6 +1280,23 @@ def execute_agent_update(
         return False, f"Falha ao baixar nova versao do agente: {exc}", False
     except OSError as exc:
         return False, f"Falha ao salvar nova versao do agente: {exc}", False
+
+    if expected_sha256:
+        try:
+            downloaded_sha256 = compute_file_sha256(downloaded_executable)
+        except OSError as exc:
+            return False, f"Falha ao validar hash da nova versao do agente: {exc}", False
+
+        if downloaded_sha256.lower() != expected_sha256:
+            try:
+                downloaded_executable.unlink(missing_ok=True)
+            except OSError:
+                logging.warning("Nao foi possivel remover executavel baixado com hash invalido: %s", downloaded_executable)
+            return (
+                False,
+                "O arquivo baixado do agente nao corresponde ao release esperado pelo backend.",
+                False,
+            )
 
     try:
         updater_script = build_agent_updater_script(current_executable, downloaded_executable)

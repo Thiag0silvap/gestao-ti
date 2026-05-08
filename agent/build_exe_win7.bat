@@ -38,6 +38,10 @@ if errorlevel 1 exit /b 1
 
 if errorlevel 1 exit /b 1
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0generate_release_metadata.ps1" -AgentScriptPath "%~dp0inventory_agent.py" -ExecutablePath "%~dp0dist\InventoryAgent.exe"
+
+if errorlevel 1 exit /b 1
+
 if exist ".env.example" copy /Y ".env.example" "dist\.env.example" >nul
 if exist ".env" copy /Y ".env" "dist\.env" >nul
 if exist "install_startup.ps1" copy /Y "install_startup.ps1" "dist\install_startup.ps1" >nul
@@ -48,3 +52,4 @@ if exist "uninstall_agent.cmd" copy /Y "uninstall_agent.cmd" "dist\uninstall_age
 echo.
 echo [Agent] Build Windows 7 finalizado.
 echo [Agent] Executavel gerado em: %~dp0dist\InventoryAgent.exe
+echo [Agent] Metadata gerado em: %~dp0dist\InventoryAgent.exe.version.json

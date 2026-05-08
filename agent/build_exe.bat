@@ -19,6 +19,12 @@ if exist ".venv\Lib\site-packages" (
   %EXTRA_ARGS% ^
   inventory_agent.py
 
+if errorlevel 1 exit /b 1
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0generate_release_metadata.ps1" -AgentScriptPath "%~dp0inventory_agent.py" -ExecutablePath "%~dp0dist\InventoryAgent.exe"
+
+if errorlevel 1 exit /b 1
+
 if exist ".env.example" copy /Y ".env.example" "dist\.env.example" >nul
 if exist ".env" copy /Y ".env" "dist\.env" >nul
 if exist "install_startup.ps1" copy /Y "install_startup.ps1" "dist\install_startup.ps1" >nul
@@ -30,3 +36,4 @@ echo.
 echo Build finalizado.
 echo Comando de build: %PYINSTALLER_CMD%
 echo Executavel gerado em: %~dp0dist\InventoryAgent.exe
+echo Metadata gerado em: %~dp0dist\InventoryAgent.exe.version.json

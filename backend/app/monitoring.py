@@ -1,4 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+OFFLINE_AFTER = timedelta(hours=24)
 
 
 def classify_computer_severity(computer, reference: datetime | None = None) -> str:
@@ -6,8 +9,7 @@ def classify_computer_severity(computer, reference: datetime | None = None) -> s
         return "offline"
 
     now = reference or datetime.now()
-    age_hours = (now - computer.last_seen).total_seconds() / 3600
-    if age_hours > 24:
+    if now - computer.last_seen > OFFLINE_AFTER:
         return "offline"
 
     cpu = computer.cpu_usage_percent or 0
@@ -37,7 +39,7 @@ def build_computer_alerts(computer, reference: datetime | None = None) -> list[d
         return alerts
 
     age_hours = (now - computer.last_seen).total_seconds() / 3600
-    if age_hours > 24:
+    if now - computer.last_seen > OFFLINE_AFTER:
         alerts.append({
             "severity": "offline",
             "metric": "connectivity",

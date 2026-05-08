@@ -7,6 +7,7 @@ import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
 import { getStoredUser } from "../services/sessionService";
+import { formatSector, normalizeSector } from "../utils/sector";
 
 const initialForm = {
   name: "",
@@ -71,7 +72,7 @@ function Users() {
       const matchesSearch =
         user.name?.toLowerCase().includes(searchText) ||
         user.username?.toLowerCase().includes(searchText) ||
-        user.sector?.toLowerCase().includes(searchText);
+        normalizeSector(user.sector).toLowerCase().includes(searchText);
 
       const matchesRole = !roleFilter || user.role === roleFilter;
       return matchesSearch && matchesRole;
@@ -83,7 +84,7 @@ function Users() {
 
     setForm((prev) => ({
       ...prev,
-      [name]: type === "checkbox" ? checked : value,
+      [name]: type === "checkbox" ? checked : name === "sector" ? normalizeSector(value) : value,
     }));
   };
 
@@ -140,7 +141,7 @@ function Users() {
       username: user.username ?? "",
       password: "",
       role: user.role ?? "operator",
-      sector: user.sector ?? "",
+      sector: normalizeSector(user.sector),
       is_active: user.is_active ?? true,
     });
 
@@ -197,6 +198,9 @@ function Users() {
     paginatedItems,
   } = useDataTable(filteredUsers, {
     initialSort: { key: "name", direction: "asc" },
+    accessors: {
+      sector: (user) => normalizeSector(user.sector),
+    },
   });
 
   const getSortIndicator = (key) => {
@@ -340,7 +344,7 @@ function Users() {
                   <td>{user.name}</td>
                   <td>{user.username}</td>
                   <td>{user.role}</td>
-                  <td>{user.sector || "-"}</td>
+                  <td>{formatSector(user.sector)}</td>
                   <td>
                     <span className={user.is_active ? "status-online" : "status-offline"}>
                       {user.is_active ? "Ativo" : "Inativo"}

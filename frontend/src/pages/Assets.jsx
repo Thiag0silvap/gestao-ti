@@ -6,6 +6,7 @@ import TableControls from "../components/TableControls";
 import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
+import { formatSector, normalizeSector } from "../utils/sector";
 
 const initialForm = {
   computer_id: "",
@@ -94,6 +95,7 @@ function Assets() {
         asset.patrimony_number?.toLowerCase().includes(searchText) ||
         asset.manufacturer?.toLowerCase().includes(searchText) ||
         asset.model?.toLowerCase().includes(searchText) ||
+        normalizeSector(asset.sector).toLowerCase().includes(searchText) ||
         asset.serial_number?.toLowerCase().includes(searchText);
 
       const matchesType = !typeFilter || asset.asset_type === typeFilter;
@@ -116,13 +118,13 @@ function Assets() {
     setForm((prev) => {
       const next = {
         ...prev,
-        [name]: value,
+        [name]: name === "sector" ? normalizeSector(value) : value,
       };
 
       if (name === "computer_id") {
         const selectedComputer = computers.find((computer) => computer.id === Number(value));
         if (selectedComputer && !editingId) {
-          next.sector = selectedComputer.sector || prev.sector;
+          next.sector = normalizeSector(selectedComputer.sector || prev.sector);
         }
       }
 
@@ -179,7 +181,7 @@ function Assets() {
       manufacturer: asset.manufacturer ?? "",
       model: asset.model ?? "",
       asset_status: asset.asset_status ?? "Ativo",
-      sector: asset.sector ?? "",
+      sector: normalizeSector(asset.sector),
       notes: asset.notes ?? "",
     });
 
@@ -225,6 +227,9 @@ function Assets() {
     paginatedItems,
   } = useDataTable(filteredAssets, {
     initialSort: { key: "asset_type", direction: "asc" },
+    accessors: {
+      sector: (asset) => normalizeSector(asset.sector),
+    },
   });
 
   const getSortIndicator = (key) => {
@@ -427,7 +432,7 @@ function Assets() {
                   <td>
                     <span className={getStatusClass(asset.asset_status)}>{asset.asset_status || "-"}</span>
                   </td>
-                  <td>{asset.sector || "-"}</td>
+                  <td>{formatSector(asset.sector)}</td>
                   <td>
                     <div className="flex flex-wrap gap-2">
                       <button onClick={() => handleEdit(asset)} className="btn-secondary px-3 py-2 text-sm">

@@ -1,5 +1,8 @@
 from datetime import datetime
+import hashlib
 import json
+import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -15,6 +18,7 @@ from app.models.user import User
 from app.schemas.remote_action import RemoteActionCreate, RemoteActionResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ALLOWED_REMOTE_ACTIONS = {"restart", "shutdown", "logoff", "lock", "update_agent"}
 ALLOWED_OPERATOR_ROLES = {"admin", "technician"}
@@ -86,6 +90,94 @@ def build_agent_download_url(request: Request) -> str:
     return str(request.base_url).rstrip("/") + settings.AGENT_RELEASE_DOWNLOAD_PATH
 
 
+def get_agent_release_metadata_path() -> Path | None:
+    release_file = (settings.AGENT_RELEASE_FILE or "").strip()
+    if not release_file:
+        return None
+
+    configured_path = ""
+    if hasattr(settings, "AGENT_RELEASE_METADATA_FILE"):
+        configured_path = (settings.AGENT_RELEASE_METADATA_FILE or "").strip()
+
+    if configured_path:
+        return Path(configured_path)
+
+    return Path(release_file).with_suffix(Path(release_file).suffix + ".version.json")
+
+
+def compute_file_sha256(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with file_path.open("rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+            if chunk:
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_agent_release_metadata() -> dict:
+    release_file = (settings.AGENT_RELEASE_FILE or "").strip()
+    if not release_file:
+        raise HTTPException(
+            status_code=400,
+            detail="Arquivo de release do agente nao esta configurado no backend.",
+        )
+
+    release_path = Path(release_file)
+    if not release_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail="Arquivo de release do agente nao foi encontrado no backend.",
+        )
+
+    metadata_path = get_agent_release_metadata_path()
+    if metadata_path is None or not metadata_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Metadados do release do agente nao encontrados. "
+                "Gere e publique o arquivo InventoryAgent.exe.version.json junto do executavel."
+            ),
+        )
+
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Metadados do release do agente invalidos: {exc}",
+        ) from exc
+
+    version = str(metadata.get("version") or "").strip()
+    sha256 = str(metadata.get("sha256") or "").strip().lower()
+    if not version or not sha256:
+        raise HTTPException(
+            status_code=400,
+            detail="Metadados do release do agente incompletos. Campos obrigatorios: version e sha256.",
+        )
+
+    actual_sha256 = compute_file_sha256(release_path).lower()
+    if actual_sha256 != sha256:
+        raise HTTPException(
+            status_code=400,
+            detail="O hash do executavel publicado nao confere com o metadata do release do agente.",
+        )
+
+    configured_version = (settings.AGENT_LATEST_VERSION or "").strip()
+    if configured_version and configured_version != version:
+        logger.warning(
+            "AGENT_LATEST_VERSION=%s difere do metadata do release=%s. O backend usara a versao do metadata.",
+            configured_version,
+            version,
+        )
+
+    return {
+        "version": version,
+        "sha256": sha256,
+        "release_path": str(release_path),
+        "metadata_path": str(metadata_path),
+    }
+
+
 @router.get("/computers/{computer_id}/remote-actions")
 def list_remote_actions(
     computer_id: int,
@@ -141,14 +233,11 @@ def create_remote_action(
 
     action_payload = None
     if normalized_action == "update_agent":
-        if not settings.AGENT_LATEST_VERSION or not settings.AGENT_RELEASE_FILE:
-            raise HTTPException(
-                status_code=400,
-                detail="Atualizacao do agente nao esta configurada no backend.",
-            )
+        release_metadata = load_agent_release_metadata()
         action_payload = {
-            "version": settings.AGENT_LATEST_VERSION,
+            "version": release_metadata["version"],
             "download_url": build_agent_download_url(request),
+            "sha256": release_metadata["sha256"],
         }
 
     action = RemoteAction(
@@ -185,6 +274,15 @@ def create_remote_action(
 
     db.commit()
     db.refresh(action)
+    logger.warning(
+        "Acao remota criada: id=%s computer_id=%s hostname=%s tipo=%s versao_alvo=%s requested_by=%s.",
+        action.id,
+        computer_id,
+        computer.hostname,
+        normalized_action,
+        action_payload.get("version") if isinstance(action_payload, dict) else None,
+        current_user.username,
+    )
     return serialize_remote_action(action)
 
 

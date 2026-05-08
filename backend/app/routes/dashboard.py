@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -11,7 +11,7 @@ from app.models.computer_printer import ComputerPrinter
 from app.models.operational_event import OperationalEvent
 from app.models.system_metric import SystemMetric
 from app.models.user import User
-from app.monitoring import classify_computer_severity
+from app.monitoring import OFFLINE_AFTER, classify_computer_severity
 
 router = APIRouter()
 
@@ -24,7 +24,7 @@ def dashboard_summary(
     total_computers = db.query(Computer).count()
     total_assets = db.query(Asset).count()
 
-    recent_limit = datetime.now() - timedelta(days=7)
+    recent_limit = datetime.now() - OFFLINE_AFTER
 
     online_recently = db.query(Computer).filter(
         Computer.last_seen != None,

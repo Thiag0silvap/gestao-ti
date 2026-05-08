@@ -1,9 +1,11 @@
 from datetime import datetime
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
+from app.computer_identity import find_computer_by_identity, find_duplicate_computers, merge_duplicate_computers, should_update_sector
 from app.config import settings
 from app.database import get_db
 from app.models.computer import Computer
@@ -13,10 +15,11 @@ from app.models.remote_action import RemoteAction
 from app.models.system_metric import SystemMetric
 from app.monitoring import classify_computer_severity
 from app.schemas.computer import ComputerCreate
-from app.schemas.remote_action import RemoteActionStatusUpdate
+from app.schemas.remote_action import RemoteActionResponse, RemoteActionStatusUpdate
 
 router = APIRouter()
 ALLOWED_AGENT_ACTION_STATUSES = {"running", "success", "failed"}
+logger = logging.getLogger(__name__)
 
 
 def add_operational_event(
@@ -157,16 +160,46 @@ def serialize_remote_action(action: RemoteAction | None) -> dict | None:
         except json.JSONDecodeError:
             payload = None
 
-    return {
-        "id": action.id,
-        "action_type": action.action_type,
-        "status": action.status,
-        "requested_by": action.requested_by,
-        "justification": action.justification,
-        "payload": payload,
-        "created_at": action.created_at.isoformat() if action.created_at else None,
-        "expires_at": action.expires_at.isoformat() if action.expires_at else None,
-    }
+    return RemoteActionResponse.model_validate(
+        {
+            "id": action.id,
+            "computer_id": action.computer_id,
+            "action_type": action.action_type,
+            "status": action.status,
+            "requested_by": action.requested_by,
+            "source_ip": action.source_ip,
+            "justification": action.justification,
+            "payload": payload,
+            "result_message": action.result_message,
+            "created_at": action.created_at,
+            "started_at": action.started_at,
+            "completed_at": action.completed_at,
+            "expires_at": action.expires_at,
+        }
+    ).model_dump(mode="json")
+
+
+def log_remote_action_delivery(source: str, computer: Computer, action: RemoteAction | None) -> None:
+    if not action:
+        logger.info(
+            "Nenhuma acao remota pendente para computer_id=%s hostname=%s agent_version=%s via %s.",
+            computer.id,
+            computer.hostname,
+            computer.agent_version,
+            source,
+        )
+        return
+
+    logger.warning(
+        "Entregando acao remota id=%s tipo=%s status=%s para computer_id=%s hostname=%s agent_version=%s via %s.",
+        action.id,
+        action.action_type,
+        action.status,
+        computer.id,
+        computer.hostname,
+        computer.agent_version,
+        source,
+    )
 
 
 def sync_computer_printers(db: Session, computer_id: int, printers: list | None) -> None:
@@ -205,11 +238,12 @@ def sync_computer(
     if x_api_key != settings.AGENT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid agent key")
 
-    computer = db.query(Computer).filter(
-        Computer.mac_address == data.mac_address
-    ).first()
+    identity_match = find_computer_by_identity(db, data)
+    computer = identity_match.computer
 
     if computer:
+        duplicates = find_duplicate_computers(db, computer, data)
+        merged_count = merge_duplicate_computers(db, computer, duplicates)
         previous_severity = classify_computer_severity(computer)
         computer.hostname = data.hostname
         computer.user = data.user
@@ -225,7 +259,8 @@ def sync_computer(
         computer.uptime_hours = data.uptime_hours
         computer.disk = data.disk
         computer.os = data.os
-        computer.sector = data.sector
+        if should_update_sector(computer.sector, data.sector):
+            computer.sector = data.sector
         computer.patrimony_number = data.patrimony_number
         computer.serial_number = data.serial_number
         computer.manufacturer = data.manufacturer
@@ -271,13 +306,25 @@ def sync_computer(
             )
             db.add(metric)
         create_sync_events(db, computer, previous_severity, False, data)
+        if merged_count:
+            add_operational_event(
+                db=db,
+                computer_id=computer.id,
+                severity="info",
+                event_type="deduplication",
+                title="Registros duplicados consolidados",
+                message=f"{merged_count} registro(s) duplicado(s) foram unidos a esta maquina durante o sync do agente.",
+            )
         pending_action = get_next_pending_action(db, computer.id)
+        log_remote_action_delivery("sync", computer, pending_action)
         db.commit()
 
         return {
             "message": "Computador atualizado com sucesso",
             "id": computer.id,
             "hostname": computer.hostname,
+            "identity_strategy": identity_match.strategy,
+            "merged_duplicates": merged_count,
             "remote_action": serialize_remote_action(pending_action),
         }
 
@@ -346,6 +393,7 @@ def sync_computer(
         db.add(metric)
     create_sync_events(db, new_computer, None, True, data)
     pending_action = get_next_pending_action(db, new_computer.id)
+    log_remote_action_delivery("sync", new_computer, pending_action)
     db.commit()
 
     return {
@@ -370,6 +418,7 @@ def get_pending_remote_action(
         raise HTTPException(status_code=404, detail="Computador nao encontrado")
 
     pending_action = get_next_pending_action(db, computer.id)
+    log_remote_action_delivery("poll", computer, pending_action)
     db.commit()
 
     return {
@@ -404,6 +453,13 @@ def update_remote_action_status(
         action.status = "running"
         action.started_at = now
         action.result_message = data.result_message
+        logger.warning(
+            "Agente reportou acao remota em execucao: action_id=%s computer_id=%s status=%s mensagem=%s",
+            action.id,
+            action.computer_id,
+            data.status,
+            data.result_message,
+        )
         add_operational_event(
             db=db,
             computer_id=action.computer_id,
@@ -418,6 +474,13 @@ def update_remote_action_status(
             action.started_at = now
         action.completed_at = now
         action.result_message = data.result_message
+        logger.warning(
+            "Agente concluiu acao remota: action_id=%s computer_id=%s status=%s mensagem=%s",
+            action.id,
+            action.computer_id,
+            data.status,
+            data.result_message,
+        )
         add_operational_event(
             db=db,
             computer_id=action.computer_id,

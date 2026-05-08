@@ -5,6 +5,7 @@ import api from "../api/api";
 import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import { severityClassName, severityLabel } from "../utils/hostSeverity";
+import { formatSector } from "../utils/sector";
 
 function Alerts() {
   const [alerts, setAlerts] = useState([]);
@@ -146,7 +147,7 @@ function Alerts() {
               </div>
 
               <div className="min-w-[220px] rounded-[20px] border border-slate-200 bg-white/80 p-4 text-sm text-slate-600">
-                <p>Setor: {alert.sector || "-"}</p>
+                <p>Setor: {formatSector(alert.sector)}</p>
                 <p className="mt-1">Último contato: {formatDateTime(alert.last_seen)}</p>
                 <p className="mt-1">CPU: {alert.cpu_usage_percent != null ? `${alert.cpu_usage_percent}%` : "-"}</p>
                 <p className="mt-1">Memória: {alert.memory_usage_percent != null ? `${alert.memory_usage_percent}%` : "-"}</p>

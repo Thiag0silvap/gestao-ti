@@ -7,6 +7,7 @@ import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import { getStoredUser } from "../services/sessionService";
 import { classifyHostSeverity, severityClassName, severityLabel } from "../utils/hostSeverity";
+import { formatSector } from "../utils/sector";
 
 const REMOTE_ACTION_LABELS = {
   restart: "Reiniciar",
@@ -340,7 +341,7 @@ function ComputerDetail() {
 
           <div className="rounded-[24px] border border-slate-200 bg-white/85 p-5">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Setor</p>
-            <p className="mt-3 text-lg font-semibold text-slate-900">{computer.sector || "-"}</p>
+            <p className="mt-3 text-lg font-semibold text-slate-900">{formatSector(computer.sector)}</p>
             <p className="mt-1 text-sm text-slate-500">{computer.equipment_status || "Sem status"}</p>
           </div>
 

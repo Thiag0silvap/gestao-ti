@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { getCurrentUser } from "../services/authService";
+import { formatSector, normalizeSector } from "../utils/sector";
 
 const titles = {
   "/dashboard": {
@@ -105,7 +106,7 @@ function Navbar({ onOpenSidebar }) {
               </p>
               <p className="mt-1 text-sm font-semibold text-slate-800">{user.name}</p>
               <p className="text-sm text-slate-500">
-                {user.role} {user.sector ? `• ${user.sector}` : ""}
+                {user.role} {normalizeSector(user.sector) ? `• ${formatSector(user.sector)}` : ""}
               </p>
             </div>
           )}

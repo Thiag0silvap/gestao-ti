@@ -7,6 +7,7 @@ import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
 import { classifyHostSeverity, severityClassName, severityLabel } from "../utils/hostSeverity";
+import { formatSector, normalizeSector } from "../utils/sector";
 
 function getAgentOperationalBadge(computer) {
   if ((computer.agent_offline_queue_size ?? 0) > 0) {
@@ -55,7 +56,7 @@ function Computers() {
   useAutoRefresh(loadComputers);
 
   const sectors = useMemo(() => {
-    const uniqueSectors = [...new Set(computers.map((c) => c.sector).filter(Boolean))];
+    const uniqueSectors = [...new Set(computers.map((c) => normalizeSector(c.sector)).filter(Boolean))];
     return uniqueSectors.sort((a, b) => a.localeCompare(b));
   }, [computers]);
 
@@ -77,9 +78,10 @@ function Computers() {
         computer.user?.toLowerCase().includes(searchText) ||
         computer.ip_address?.toLowerCase().includes(searchText) ||
         computer.serial_number?.toLowerCase().includes(searchText) ||
+        normalizeSector(computer.sector).toLowerCase().includes(searchText) ||
         computer.agent_id?.toLowerCase().includes(searchText);
 
-      const matchesSector = !sectorFilter || computer.sector === sectorFilter;
+      const matchesSector = !sectorFilter || normalizeSector(computer.sector) === sectorFilter;
       const matchesStatus = !statusFilter || classifyHostSeverity(computer) === statusFilter;
 
       return matchesSearch && matchesSector && matchesStatus;
@@ -124,6 +126,7 @@ function Computers() {
         return { critical: 3, warning: 2, offline: 1, healthy: 0 }[severity] ?? 0;
       },
       last_seen: (computer) => computer.last_seen || "",
+      sector: (computer) => normalizeSector(computer.sector),
     },
   });
 
@@ -304,7 +307,7 @@ function Computers() {
                     </div>
                   </td>
                   <td>{computer.os || "-"}</td>
-                  <td>{computer.sector || "-"}</td>
+                  <td>{formatSector(computer.sector)}</td>
                   <td>
                     <span className={severityClassName(classifyHostSeverity(computer))}>
                       {severityLabel(classifyHostSeverity(computer))}

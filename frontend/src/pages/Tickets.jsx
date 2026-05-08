@@ -7,6 +7,7 @@ import { useUI } from "../components/UIContext";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 import useDataTable from "../hooks/useDataTable";
 import { getStoredUser } from "../services/sessionService";
+import { formatSector, normalizeSector } from "../utils/sector";
 
 const initialForm = {
   title: "",
@@ -95,6 +96,7 @@ function Tickets() {
         ticket.title?.toLowerCase().includes(searchText) ||
         ticket.description?.toLowerCase().includes(searchText) ||
         ticket.requester_name?.toLowerCase().includes(searchText) ||
+        normalizeSector(ticket.sector).toLowerCase().includes(searchText) ||
         ticket.computer_hostname?.toLowerCase().includes(searchText);
 
       const matchesStatus = !statusFilter || ticket.status === statusFilter;
@@ -110,13 +112,13 @@ function Tickets() {
     setForm((prev) => {
       const next = {
         ...prev,
-        [name]: value,
+        [name]: name === "sector" ? normalizeSector(value) : value,
       };
 
       if (name === "computer_id") {
         const selectedComputer = computers.find((computer) => computer.id === Number(value));
         if (selectedComputer) {
-          next.sector = selectedComputer.sector || prev.sector;
+          next.sector = normalizeSector(selectedComputer.sector || prev.sector);
         }
       }
 
@@ -171,7 +173,7 @@ function Tickets() {
       status: ticket.status ?? "Aberto",
       assigned_to_id: ticket.assigned_to_id ?? "",
       computer_id: ticket.computer_id ?? "",
-      sector: ticket.sector ?? "",
+      sector: normalizeSector(ticket.sector),
     });
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -229,6 +231,9 @@ function Tickets() {
     paginatedItems,
   } = useDataTable(filteredTickets, {
     initialSort: { key: "title", direction: "asc" },
+    accessors: {
+      sector: (ticket) => normalizeSector(ticket.sector),
+    },
   });
 
   const getSortIndicator = (key) => {
@@ -422,7 +427,7 @@ function Tickets() {
               paginatedItems.map((ticket) => (
                 <tr key={ticket.id}>
                   <td>{ticket.title}</td>
-                  <td>{ticket.sector || "-"}</td>
+                  <td>{formatSector(ticket.sector)}</td>
                   <td>{ticket.computer_hostname || "-"}</td>
                   <td>
                     <span className={getStatusClass(ticket.status)}>{ticket.status}</span>

@@ -1,4 +1,8 @@
 export function classifyHostSeverity(computer) {
+  if (computer?.health_status) {
+    return computer.health_status;
+  }
+
   if (!computer?.last_seen) {
     return "offline";
   }

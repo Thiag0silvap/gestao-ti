@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.computer_identity import find_computer_by_identity, should_update_sector
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.asset import Asset
@@ -11,9 +12,26 @@ from app.models.computer_printer import ComputerPrinter
 from app.models.operational_event import OperationalEvent
 from app.models.system_metric import SystemMetric
 from app.models.user import User
+from app.monitoring import classify_computer_severity
 from app.schemas.computer import ComputerCreate
 
 router = APIRouter()
+
+
+def serialize_computer(computer: Computer) -> dict:
+    payload = {
+        column.name: getattr(computer, column.name)
+        for column in Computer.__table__.columns
+    }
+    payload["health_status"] = classify_computer_severity(computer)
+    return payload
+
+
+def apply_computer_payload(computer: Computer, data: ComputerCreate, preserve_existing_sector: bool = False) -> None:
+    for key, value in data.model_dump(exclude={"printers"}).items():
+        if key == "sector" and preserve_existing_sector and not should_update_sector(computer.sector, value):
+            continue
+        setattr(computer, key, value)
 
 
 @router.post("/computers")
@@ -22,16 +40,10 @@ def create_or_update_computer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = None
-
-    if data.mac_address:
-        computer = db.query(Computer).filter(
-            Computer.mac_address == data.mac_address
-        ).first()
+    computer = find_computer_by_identity(db, data).computer
 
     if computer:
-        for key, value in data.model_dump(exclude={"printers"}).items():
-            setattr(computer, key, value)
+        apply_computer_payload(computer, data)
 
         computer.last_seen = datetime.now()
 
@@ -40,7 +52,7 @@ def create_or_update_computer(
 
         return {
             "message": "Computador atualizado",
-            "computer": computer
+            "computer": serialize_computer(computer)
         }
 
     new_computer = Computer(**data.model_dump(exclude={"printers"}))
@@ -52,7 +64,7 @@ def create_or_update_computer(
 
     return {
         "message": "Computador cadastrado",
-        "computer": new_computer
+        "computer": serialize_computer(new_computer)
     }
 
 
@@ -67,7 +79,7 @@ def list_computers(
     if sector:
         query = query.filter(Computer.sector == sector)
 
-    return query.all()
+    return [serialize_computer(computer) for computer in query.all()]
 
 
 @router.get("/computers/{computer_id}")
@@ -81,7 +93,7 @@ def get_computer(
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
-    return computer
+    return serialize_computer(computer)
 
 
 @router.get("/computers/{computer_id}/assets")
@@ -201,13 +213,12 @@ def update_computer(
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
-    for key, value in data.model_dump(exclude={"printers"}).items():
-        setattr(computer, key, value)
+    apply_computer_payload(computer, data)
 
     db.commit()
     db.refresh(computer)
 
-    return computer
+    return serialize_computer(computer)
 
 
 @router.delete("/computers/{computer_id}")

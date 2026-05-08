@@ -19,6 +19,7 @@ class Settings:
     API_RELOAD = os.getenv("API_RELOAD", "false").strip().lower() in {"1", "true", "yes", "sim", "on"}
     AGENT_LATEST_VERSION = os.getenv("AGENT_LATEST_VERSION", "").strip()
     AGENT_RELEASE_FILE = os.getenv("AGENT_RELEASE_FILE", "").strip()
+    AGENT_RELEASE_METADATA_FILE = os.getenv("AGENT_RELEASE_METADATA_FILE", "").strip()
     AGENT_RELEASE_DOWNLOAD_PATH = os.getenv("AGENT_RELEASE_DOWNLOAD_PATH", "/downloads/agent/InventoryAgent.exe").strip()
     BACKEND_CORS_ORIGINS = [
         origin.strip()
