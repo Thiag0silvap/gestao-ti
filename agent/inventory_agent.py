@@ -80,6 +80,29 @@ OFFLINE_QUEUE_FILE = STATE_DIR / "offline_queue.jsonl"
 MAX_OFFLINE_QUEUE_ITEMS = 250
 MAX_OFFLINE_QUEUE_BYTES = 5 * 1024 * 1024
 
+# Padrões para ignorar impressoras virtuais/nativas
+IGNORED_PRINTER_PATTERNS = (
+    "microsoft print to pdf",
+    "microsoft xps document writer",
+    "fax",
+    "onenote",
+    "anydesk printer",
+    "webex document loader",
+    "send to onenote",
+    "root\\print",
+    "pdf architect",
+    "pdfcreator",
+    "cutepdf",
+    "foxit reader pdf printer",
+    "nitro pdf",
+    "universal printer",
+)
+IGNORED_PORT_PATTERNS = (
+    "portprompt:",
+    "nul:",
+    "shrfax:",
+)
+
 
 def ensure_state_dir() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -823,6 +846,29 @@ def get_memory_details() -> tuple[str | None, str | None]:
     return memory_type, memory_speed
 
 
+def is_virtual_printer(printer: dict) -> bool:
+    """Verifica se uma impressora é virtual/nativa do Windows e deve ser ignorada."""
+    name = (printer.get("Name") or "").lower()
+    driver = (printer.get("DriverName") or "").lower()
+    port = (printer.get("PortName") or "").lower()
+
+    # Ignorar drivers de software genéricos da Microsoft
+    if driver == "microsoft software printer driver":
+        return True
+
+    # Ignorar por padrões de nome ou driver
+    for pattern in IGNORED_PRINTER_PATTERNS:
+        if pattern in name or pattern in driver:
+            return True
+
+    # Ignorar por padrões de porta (ex: portas de arquivo ou virtuais)
+    for port_pattern in IGNORED_PORT_PATTERNS:
+        if port_pattern in port:
+            return True
+
+    return False
+
+
 def get_printers() -> list[dict]:
     powershell_script = (
         "Get-CimInstance Win32_Printer | "
@@ -856,6 +902,11 @@ def get_printers() -> list[dict]:
     for printer in printers:
         name = normalize_blank(printer.get("Name"))
         if not name or name in seen_names:
+            continue
+
+        # Aplicar filtro de impressoras virtuais
+        if is_virtual_printer(printer):
+            logging.debug("Impressora ignorada por ser virtual: %s (Port: %s)", name, printer.get("PortName"))
             continue
 
         seen_names.add(name)

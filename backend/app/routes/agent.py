@@ -3,7 +3,8 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.computer_identity import find_computer_by_identity, find_duplicate_computers, merge_duplicate_computers, should_update_sector
 from app.config import settings
@@ -22,8 +23,8 @@ ALLOWED_AGENT_ACTION_STATUSES = {"running", "success", "failed"}
 logger = logging.getLogger(__name__)
 
 
-def add_operational_event(
-    db: Session,
+async def add_operational_event(
+    db: AsyncSession,
     computer_id: int,
     severity: str,
     event_type: str,
@@ -64,8 +65,8 @@ def describe_sync_message(data: ComputerCreate) -> str:
     return "Telemetria recebida: " + ", ".join(parts) + "."
 
 
-def create_sync_events(
-    db: Session,
+async def create_sync_events(
+    db: AsyncSession,
     computer: Computer,
     previous_severity: str | None,
     is_new: bool,
@@ -74,7 +75,7 @@ def create_sync_events(
     current_severity = classify_computer_severity(computer)
 
     if is_new:
-        add_operational_event(
+        await add_operational_event(
             db=db,
             computer_id=computer.id,
             severity="info",
@@ -83,7 +84,7 @@ def create_sync_events(
             message="A maquina foi cadastrada no monitoramento e enviou o primeiro inventario.",
         )
 
-    add_operational_event(
+    await add_operational_event(
         db=db,
         computer_id=computer.id,
         severity="info",
@@ -102,7 +103,7 @@ def create_sync_events(
         "offline": ("offline", "Host offline", "A maquina esta sem comunicacao dentro da janela esperada."),
     }
     severity, title, message = severity_titles[current_severity]
-    add_operational_event(
+    await add_operational_event(
         db=db,
         computer_id=computer.id,
         severity=severity,
@@ -112,24 +113,23 @@ def create_sync_events(
     )
 
 
-def expire_overdue_actions(db: Session, computer_id: int) -> None:
+async def expire_overdue_actions(db: AsyncSession, computer_id: int) -> None:
     now = datetime.now()
-    overdue_actions = (
-        db.query(RemoteAction)
-        .filter(
+    result = await db.execute(
+        select(RemoteAction).filter(
             RemoteAction.computer_id == computer_id,
             RemoteAction.status == "pending",
             RemoteAction.expires_at.isnot(None),
             RemoteAction.expires_at < now,
         )
-        .all()
     )
+    overdue_actions = result.scalars().all()
 
     for action in overdue_actions:
         action.status = "expired"
         action.completed_at = now
         action.result_message = "A acao expirou antes de ser processada pelo agente."
-        add_operational_event(
+        await add_operational_event(
             db=db,
             computer_id=computer_id,
             severity="warning",
@@ -139,14 +139,14 @@ def expire_overdue_actions(db: Session, computer_id: int) -> None:
         )
 
 
-def get_next_pending_action(db: Session, computer_id: int) -> RemoteAction | None:
-    expire_overdue_actions(db, computer_id)
-    return (
-        db.query(RemoteAction)
+async def get_next_pending_action(db: AsyncSession, computer_id: int) -> RemoteAction | None:
+    await expire_overdue_actions(db, computer_id)
+    result = await db.execute(
+        select(RemoteAction)
         .filter(RemoteAction.computer_id == computer_id, RemoteAction.status == "pending")
         .order_by(RemoteAction.created_at.asc(), RemoteAction.id.asc())
-        .first()
     )
+    return result.scalars().first()
 
 
 def serialize_remote_action(action: RemoteAction | None) -> dict | None:
@@ -202,11 +202,11 @@ def log_remote_action_delivery(source: str, computer: Computer, action: RemoteAc
     )
 
 
-def sync_computer_printers(db: Session, computer_id: int, printers: list | None) -> None:
+async def sync_computer_printers(db: AsyncSession, computer_id: int, printers: list | None) -> None:
     if printers is None:
         return
 
-    db.query(ComputerPrinter).filter(ComputerPrinter.computer_id == computer_id).delete()
+    await db.execute(delete(ComputerPrinter).filter(ComputerPrinter.computer_id == computer_id))
 
     for printer in printers:
         if not printer.name:
@@ -230,20 +230,20 @@ def sync_computer_printers(db: Session, computer_id: int, printers: list | None)
 
 
 @router.post("/agent/computers/sync")
-def sync_computer(
+async def sync_computer(
     data: ComputerCreate,
     x_api_key: str = Header(default=""),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     if x_api_key != settings.AGENT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid agent key")
 
-    identity_match = find_computer_by_identity(db, data)
+    identity_match = await find_computer_by_identity(db, data)
     computer = identity_match.computer
 
     if computer:
-        duplicates = find_duplicate_computers(db, computer, data)
-        merged_count = merge_duplicate_computers(db, computer, duplicates)
+        duplicates = await find_duplicate_computers(db, computer, data)
+        merged_count = await merge_duplicate_computers(db, computer, duplicates)
         previous_severity = classify_computer_severity(computer)
         computer.hostname = data.hostname
         computer.user = data.user
@@ -282,9 +282,9 @@ def sync_computer(
         computer.notes = data.notes
         computer.last_seen = datetime.now()
 
-        db.commit()
-        db.refresh(computer)
-        sync_computer_printers(db, computer.id, data.printers)
+        await db.commit()
+        await db.refresh(computer)
+        await sync_computer_printers(db, computer.id, data.printers)
 
         if any(
             value is not None
@@ -305,9 +305,9 @@ def sync_computer(
                 uptime_hours=data.uptime_hours,
             )
             db.add(metric)
-        create_sync_events(db, computer, previous_severity, False, data)
+        await create_sync_events(db, computer, previous_severity, False, data)
         if merged_count:
-            add_operational_event(
+            await add_operational_event(
                 db=db,
                 computer_id=computer.id,
                 severity="info",
@@ -315,17 +315,23 @@ def sync_computer(
                 title="Registros duplicados consolidados",
                 message=f"{merged_count} registro(s) duplicado(s) foram unidos a esta maquina durante o sync do agente.",
             )
-        pending_action = get_next_pending_action(db, computer.id)
+        pending_action = await get_next_pending_action(db, computer.id)
         log_remote_action_delivery("sync", computer, pending_action)
-        db.commit()
+        
+        # Capturamos os dados necessários ANTES do commit
+        computer_id_val = computer.id
+        computer_hostname_val = computer.hostname
+        action_data = serialize_remote_action(pending_action)
+        
+        await db.commit()
 
         return {
             "message": "Computador atualizado com sucesso",
-            "id": computer.id,
-            "hostname": computer.hostname,
+            "id": computer_id_val,
+            "hostname": computer_hostname_val,
             "identity_strategy": identity_match.strategy,
             "merged_duplicates": merged_count,
-            "remote_action": serialize_remote_action(pending_action),
+            "remote_action": action_data,
         }
 
     new_computer = Computer(
@@ -368,9 +374,9 @@ def sync_computer(
     )
 
     db.add(new_computer)
-    db.commit()
-    db.refresh(new_computer)
-    sync_computer_printers(db, new_computer.id, data.printers)
+    await db.commit()
+    await db.refresh(new_computer)
+    await sync_computer_printers(db, new_computer.id, data.printers)
 
     if any(
         value is not None
@@ -391,48 +397,57 @@ def sync_computer(
             uptime_hours=data.uptime_hours,
         )
         db.add(metric)
-    create_sync_events(db, new_computer, None, True, data)
-    pending_action = get_next_pending_action(db, new_computer.id)
+    await create_sync_events(db, new_computer, None, True, data)
+    pending_action = await get_next_pending_action(db, new_computer.id)
     log_remote_action_delivery("sync", new_computer, pending_action)
-    db.commit()
+    # Capturamos os dados necessários ANTES do commit para evitar erros de greenlet/lazy-load
+    computer_id_val = new_computer.id
+    computer_hostname_val = new_computer.hostname
+    action_data = serialize_remote_action(pending_action)
+
+    await db.commit()
 
     return {
         "message": "Computador cadastrado com sucesso",
-        "id": new_computer.id,
-        "hostname": new_computer.hostname,
-        "remote_action": serialize_remote_action(pending_action),
+        "id": computer_id_val,
+        "hostname": computer_hostname_val,
+        "remote_action": action_data,
     }
 
 
 @router.get("/agent/computers/{computer_id}/remote-action")
-def get_pending_remote_action(
+async def get_pending_remote_action(
     computer_id: int,
     x_api_key: str = Header(default=""),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     if x_api_key != settings.AGENT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid agent key")
 
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result.scalars().first()
     if not computer:
         raise HTTPException(status_code=404, detail="Computador nao encontrado")
 
-    pending_action = get_next_pending_action(db, computer.id)
+    pending_action = await get_next_pending_action(db, computer.id)
     log_remote_action_delivery("poll", computer, pending_action)
-    db.commit()
+    # Capturamos os dados necessários ANTES do commit
+    action_data = serialize_remote_action(pending_action)
+    
+    await db.commit()
 
     return {
-        "computer_id": computer.id,
-        "remote_action": serialize_remote_action(pending_action),
+        "computer_id": computer_id,
+        "remote_action": action_data,
     }
 
 
 @router.post("/agent/remote-actions/{action_id}/status")
-def update_remote_action_status(
+async def update_remote_action_status(
     action_id: int,
     data: RemoteActionStatusUpdate,
     x_api_key: str = Header(default=""),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     if x_api_key != settings.AGENT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid agent key")
@@ -440,7 +455,8 @@ def update_remote_action_status(
     if data.status not in ALLOWED_AGENT_ACTION_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid action status")
 
-    action = db.query(RemoteAction).filter(RemoteAction.id == action_id).first()
+    result = await db.execute(select(RemoteAction).filter(RemoteAction.id == action_id))
+    action = result.scalars().first()
     if not action:
         raise HTTPException(status_code=404, detail="Remote action not found")
 
@@ -460,7 +476,7 @@ def update_remote_action_status(
             data.status,
             data.result_message,
         )
-        add_operational_event(
+        await add_operational_event(
             db=db,
             computer_id=action.computer_id,
             severity="warning",
@@ -481,7 +497,7 @@ def update_remote_action_status(
             data.status,
             data.result_message,
         )
-        add_operational_event(
+        await add_operational_event(
             db=db,
             computer_id=action.computer_id,
             severity="info" if data.status == "success" else "critical",
@@ -493,8 +509,8 @@ def update_remote_action_status(
             ),
         )
 
-    db.commit()
-    db.refresh(action)
+    await db.commit()
+    await db.refresh(action)
 
     return {
         "message": "Status da acao remota atualizado",

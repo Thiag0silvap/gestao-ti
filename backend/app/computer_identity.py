@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.asset import Asset
 from app.models.computer import Computer
@@ -14,7 +14,11 @@ from app.models.system_metric import SystemMetric
 from app.models.ticket import Ticket
 
 
-UNKNOWN_VALUES = {"", "-", "unknown", "none", "null", "nao informado", "não informado"}
+UNKNOWN_VALUES = {
+    "", "-", "unknown", "none", "null", "nao informado", "não informado",
+    "default string", "to be filled by o.e.m.", "system serial number",
+    "00000000", "12345678", "fill by oem", "not specified"
+}
 PRESERVED_SECTOR_VALUES = {"", "nao informado", "não informado"}
 
 
@@ -62,7 +66,7 @@ def should_update_sector(current_sector: str | None, incoming_sector: str | None
     return values_match(current_sector, incoming_sector)
 
 
-def find_computer_by_identity(db: Session, data) -> IdentityMatch:
+async def find_computer_by_identity(db: AsyncSession, data) -> IdentityMatch:
     strategies = [
         ("agent_id", Computer.agent_id, normalize_identity(data.agent_id), False),
         ("serial_number", Computer.serial_number, normalize_identity(data.serial_number), True),
@@ -75,20 +79,22 @@ def find_computer_by_identity(db: Session, data) -> IdentityMatch:
         if not value:
             continue
 
-        query = db.query(Computer)
+        stmt = select(Computer)
         if case_insensitive:
-            query = query.filter(func.lower(column) == value.lower())
+            stmt = stmt.filter(func.lower(column) == value.lower())
         else:
-            query = query.filter(column == value)
+            stmt = stmt.filter(column == value)
 
-        computer = query.order_by(Computer.last_seen.desc(), Computer.id.asc()).first()
+        stmt = stmt.order_by(Computer.last_seen.desc(), Computer.id.asc())
+        result = await db.execute(stmt)
+        computer = result.scalars().first()
         if computer:
             return IdentityMatch(computer=computer, strategy=strategy)
 
     return IdentityMatch(computer=None, strategy=None)
 
 
-def find_duplicate_computers(db: Session, primary: Computer, data) -> list[Computer]:
+async def find_duplicate_computers(db: AsyncSession, primary: Computer, data) -> list[Computer]:
     filters = []
 
     if normalize_identity(data.agent_id):
@@ -105,12 +111,9 @@ def find_duplicate_computers(db: Session, primary: Computer, data) -> list[Compu
     if not filters:
         return []
 
-    return (
-        db.query(Computer)
-        .filter(Computer.id != primary.id, or_(*filters))
-        .order_by(Computer.last_seen.desc(), Computer.id.asc())
-        .all()
-    )
+    stmt = select(Computer).filter(Computer.id != primary.id, or_(*filters)).order_by(Computer.last_seen.desc(), Computer.id.asc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 def fill_missing_computer_fields(primary: Computer, duplicate: Computer) -> None:
@@ -152,22 +155,23 @@ def fill_missing_computer_fields(primary: Computer, duplicate: Computer) -> None
             setattr(primary, field, getattr(duplicate, field))
 
 
-def merge_duplicate_computers(db: Session, primary: Computer, duplicates: list[Computer]) -> int:
+async def merge_duplicate_computers(db: AsyncSession, primary: Computer, duplicates: list[Computer]) -> int:
     merged_count = 0
 
     for duplicate in duplicates:
         for model in (Asset, Ticket, RemoteAction, SystemMetric, OperationalEvent, ComputerPrinter):
-            db.query(model).filter(model.computer_id == duplicate.id).update(
-                {model.computer_id: primary.id},
-                synchronize_session=False,
+            await db.execute(
+                update(model)
+                .filter(model.computer_id == duplicate.id)
+                .values(computer_id=primary.id)
             )
 
         duplicate_snapshot = {
             column.name: getattr(duplicate, column.name)
             for column in Computer.__table__.columns
         }
-        db.delete(duplicate)
-        db.flush()
+        await db.delete(duplicate)
+        await db.flush()
 
         shadow_duplicate = type("DuplicateSnapshot", (), duplicate_snapshot)
         fill_missing_computer_fields(primary, shadow_duplicate)

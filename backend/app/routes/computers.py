@@ -1,7 +1,8 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.computer_identity import find_computer_by_identity, should_update_sector
 from app.core.dependencies import get_current_user
@@ -35,20 +36,20 @@ def apply_computer_payload(computer: Computer, data: ComputerCreate, preserve_ex
 
 
 @router.post("/computers")
-def create_or_update_computer(
+async def create_or_update_computer(
     data: ComputerCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = find_computer_by_identity(db, data).computer
+    identity_match = await find_computer_by_identity(db, data)
+    computer = identity_match.computer
 
     if computer:
         apply_computer_payload(computer, data)
-
         computer.last_seen = datetime.now()
 
-        db.commit()
-        db.refresh(computer)
+        await db.commit()
+        await db.refresh(computer)
 
         return {
             "message": "Computador atualizado",
@@ -59,8 +60,8 @@ def create_or_update_computer(
     new_computer.last_seen = datetime.now()
 
     db.add(new_computer)
-    db.commit()
-    db.refresh(new_computer)
+    await db.commit()
+    await db.refresh(new_computer)
 
     return {
         "message": "Computador cadastrado",
@@ -69,26 +70,29 @@ def create_or_update_computer(
 
 
 @router.get("/computers")
-def list_computers(
+async def list_computers(
     sector: str | None = Query(default=None),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(Computer)
+    stmt = select(Computer)
 
     if sector:
-        query = query.filter(Computer.sector == sector)
+        stmt = stmt.filter(Computer.sector == sector)
 
-    return [serialize_computer(computer) for computer in query.all()]
+    result = await db.execute(stmt)
+    computers = result.scalars().all()
+    return [serialize_computer(computer) for computer in computers]
 
 
 @router.get("/computers/{computer_id}")
-def get_computer(
+async def get_computer(
     computer_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result.scalars().first()
 
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
@@ -97,59 +101,63 @@ def get_computer(
 
 
 @router.get("/computers/{computer_id}/assets")
-def get_computer_assets(
+async def get_computer_assets(
     computer_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result_comp = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result_comp.scalars().first()
 
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
-    assets = db.query(Asset).filter(Asset.computer_id == computer_id).all()
-    return assets
+    result_assets = await db.execute(select(Asset).filter(Asset.computer_id == computer_id))
+    return result_assets.scalars().all()
 
 
 @router.get("/computers/{computer_id}/printers")
-def get_computer_printers(
+async def get_computer_printers(
     computer_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result_comp = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result_comp.scalars().first()
 
     if not computer:
         raise HTTPException(status_code=404, detail="Computador nao encontrado")
 
-    return (
-        db.query(ComputerPrinter)
+    stmt = (
+        select(ComputerPrinter)
         .filter(ComputerPrinter.computer_id == computer_id)
         .order_by(ComputerPrinter.is_default.desc(), ComputerPrinter.name.asc())
-        .all()
     )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 @router.get("/computers/{computer_id}/metrics")
-def get_computer_metrics(
+async def get_computer_metrics(
     computer_id: int,
     limit: int = Query(default=24, ge=1, le=500),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result_comp = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result_comp.scalars().first()
 
     if not computer:
-        raise HTTPException(status_code=404, detail="Computador nÃ£o encontrado")
+        raise HTTPException(status_code=404, detail="Computador não encontrado")
 
-    metrics = (
-        db.query(SystemMetric)
+    stmt = (
+        select(SystemMetric)
         .filter(SystemMetric.computer_id == computer_id)
         .order_by(SystemMetric.sampled_at.desc(), SystemMetric.id.desc())
         .limit(limit)
-        .all()
     )
-
+    result = await db.execute(stmt)
+    metrics = list(result.scalars().all())
     metrics.reverse()
 
     return [
@@ -167,24 +175,26 @@ def get_computer_metrics(
 
 
 @router.get("/computers/{computer_id}/events")
-def get_computer_events(
+async def get_computer_events(
     computer_id: int,
     limit: int = Query(default=20, ge=1, le=200),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result_comp = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result_comp.scalars().first()
 
     if not computer:
         raise HTTPException(status_code=404, detail="Computador nao encontrado")
 
-    events = (
-        db.query(OperationalEvent)
+    stmt = (
+        select(OperationalEvent)
         .filter(OperationalEvent.computer_id == computer_id)
         .order_by(OperationalEvent.created_at.desc(), OperationalEvent.id.desc())
         .limit(limit)
-        .all()
     )
+    result = await db.execute(stmt)
+    events = result.scalars().all()
 
     return [
         {
@@ -202,37 +212,39 @@ def get_computer_events(
 
 
 @router.put("/computers/{computer_id}")
-def update_computer(
+async def update_computer(
     computer_id: int,
     data: ComputerCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result.scalars().first()
 
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
     apply_computer_payload(computer, data)
 
-    db.commit()
-    db.refresh(computer)
+    await db.commit()
+    await db.refresh(computer)
 
     return serialize_computer(computer)
 
 
 @router.delete("/computers/{computer_id}")
-def delete_computer(
+async def delete_computer(
     computer_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result.scalars().first()
 
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
-    db.delete(computer)
-    db.commit()
+    await db.delete(computer)
+    await db.commit()
 
     return {"message": "Computador deletado com sucesso"}

@@ -20,6 +20,8 @@ agent/GestãoTI-Agent/
 agent/dist/
 
 # Node / React
+
+# Node / React
 node_modules/
 dist/
 
@@ -31,3 +33,16 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Database
+*.db
+*.sqlite
+
+# AI / Agents tools
+.agent/
+.codex/
+
+# Agent runtime state
+agent/logs/
+agent/state/
+backend/*.zip

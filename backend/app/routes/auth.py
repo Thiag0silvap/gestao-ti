@@ -2,8 +2,8 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.auth import create_access_token
@@ -18,17 +18,18 @@ router = APIRouter()
 
 
 @router.post("/users")
-def create_user(
+async def create_user(
     data: UserCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    existing_user = db.query(User).filter(
-        func.lower(User.username) == data.username.lower()
-    ).first()
+    result = await db.execute(
+        select(User).filter(func.lower(User.username) == data.username.lower())
+    )
+    existing_user = result.scalars().first()
 
     if existing_user:
         raise HTTPException(status_code=400, detail="Username já existe")
@@ -46,8 +47,8 @@ def create_user(
     )
 
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     return {
         "id": user.id,
@@ -60,13 +61,14 @@ def create_user(
 
 
 @router.post("/auth/login", response_model=Token)
-def login(
+async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
-    user = db.query(User).filter(
-        func.lower(User.username) == form_data.username.lower()
-    ).first()
+    result = await db.execute(
+        select(User).filter(func.lower(User.username) == form_data.username.lower())
+    )
+    user = result.scalars().first()
 
     if not user:
         raise HTTPException(
@@ -100,14 +102,15 @@ def login(
 
 
 @router.get("/users")
-def list_users(
-    db: Session = Depends(get_db),
+async def list_users(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    users = db.query(User).all()
+    result = await db.execute(select(User))
+    users = result.scalars().all()
 
     return [
         {
@@ -124,7 +127,7 @@ def list_users(
 
 
 @router.get("/users/me")
-def read_users_me(current_user: User = Depends(get_current_user)):
+async def read_users_me(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "name": current_user.name,
@@ -136,24 +139,28 @@ def read_users_me(current_user: User = Depends(get_current_user)):
 
 
 @router.put("/users/{user_id}")
-def update_user(
+async def update_user(
     user_id: int,
     data: UserCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
 
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    existing_user = db.query(User).filter(
-        func.lower(User.username) == data.username.lower(),
-        User.id != user_id
-    ).first()
+    result_existing = await db.execute(
+        select(User).filter(
+            func.lower(User.username) == data.username.lower(),
+            User.id != user_id
+        )
+    )
+    existing_user = result_existing.scalars().first()
 
     if existing_user:
         raise HTTPException(status_code=400, detail="Username já existe")
@@ -167,8 +174,8 @@ def update_user(
     if data.password:
         user.password_hash = get_password_hash(data.password)
 
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     return {
         "id": user.id,
@@ -181,15 +188,16 @@ def update_user(
 
 
 @router.patch("/users/{user_id}/status")
-def toggle_user_status(
+async def toggle_user_status(
     user_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
 
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
@@ -199,8 +207,8 @@ def toggle_user_status(
 
     user.is_active = not user.is_active
 
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     return {
         "id": user.id,
@@ -213,15 +221,16 @@ def toggle_user_status(
 
 
 @router.delete("/users/{user_id}")
-def delete_user(
+async def delete_user(
     user_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
 
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
@@ -229,7 +238,7 @@ def delete_user(
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Você não pode excluir seu próprio usuário")
 
-    db.delete(user)
-    db.commit()
+    await db.delete(user)
+    await db.commit()
 
     return {"message": "Usuário deletado com sucesso"}

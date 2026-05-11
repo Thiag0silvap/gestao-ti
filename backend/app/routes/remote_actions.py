@@ -6,7 +6,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.dependencies import get_current_user
@@ -29,8 +30,8 @@ def ensure_remote_action_role(current_user: User) -> None:
         raise HTTPException(status_code=403, detail="Acesso negado")
 
 
-def add_remote_action_event(
-    db: Session,
+async def add_remote_action_event(
+    db: AsyncSession,
     computer_id: int,
     severity: str,
     title: str,
@@ -74,16 +75,17 @@ def serialize_remote_action(action: RemoteAction) -> dict:
     ).model_dump(mode="json")
 
 
-def get_active_remote_action(db: Session, computer_id: int) -> RemoteAction | None:
-    return (
-        db.query(RemoteAction)
+async def get_active_remote_action(db: AsyncSession, computer_id: int) -> RemoteAction | None:
+    stmt = (
+        select(RemoteAction)
         .filter(
             RemoteAction.computer_id == computer_id,
             RemoteAction.status.in_(("pending", "running")),
         )
         .order_by(RemoteAction.created_at.asc(), RemoteAction.id.asc())
-        .first()
     )
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
 def build_agent_download_url(request: Request) -> str:
@@ -179,40 +181,43 @@ def load_agent_release_metadata() -> dict:
 
 
 @router.get("/computers/{computer_id}/remote-actions")
-def list_remote_actions(
+async def list_remote_actions(
     computer_id: int,
     limit: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     ensure_remote_action_role(current_user)
 
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result_comp = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result_comp.scalars().first()
     if not computer:
         raise HTTPException(status_code=404, detail="Computador nao encontrado")
 
-    actions = (
-        db.query(RemoteAction)
+    stmt = (
+        select(RemoteAction)
         .filter(RemoteAction.computer_id == computer_id)
         .order_by(RemoteAction.created_at.desc(), RemoteAction.id.desc())
         .limit(limit)
-        .all()
     )
+    result = await db.execute(stmt)
+    actions = result.scalars().all()
 
     return [serialize_remote_action(action) for action in actions]
 
 
 @router.post("/computers/{computer_id}/remote-actions")
-def create_remote_action(
+async def create_remote_action(
     computer_id: int,
     data: RemoteActionCreate,
     request: Request,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     ensure_remote_action_role(current_user)
 
-    computer = db.query(Computer).filter(Computer.id == computer_id).first()
+    result_comp = await db.execute(select(Computer).filter(Computer.id == computer_id))
+    computer = result_comp.scalars().first()
     if not computer:
         raise HTTPException(status_code=404, detail="Computador nao encontrado")
 
@@ -224,7 +229,7 @@ def create_remote_action(
     if not justification:
         raise HTTPException(status_code=400, detail="Justificativa obrigatoria para acao remota")
 
-    active_action = get_active_remote_action(db, computer_id)
+    active_action = await get_active_remote_action(db, computer_id)
     if active_action:
         raise HTTPException(
             status_code=409,
@@ -251,7 +256,7 @@ def create_remote_action(
         expires_at=data.expires_at,
     )
     db.add(action)
-    db.flush()
+    await db.flush()
 
     display_name = {
         "restart": "reinicializacao",
@@ -261,7 +266,7 @@ def create_remote_action(
         "update_agent": "atualizacao do agente",
     }[normalized_action]
     extra_reason = f" Justificativa: {justification}." if justification else ""
-    add_remote_action_event(
+    await add_remote_action_event(
         db=db,
         computer_id=computer_id,
         severity="warning",
@@ -272,8 +277,8 @@ def create_remote_action(
         ),
     )
 
-    db.commit()
-    db.refresh(action)
+    await db.commit()
+    await db.refresh(action)
     logger.warning(
         "Acao remota criada: id=%s computer_id=%s hostname=%s tipo=%s versao_alvo=%s requested_by=%s.",
         action.id,
@@ -287,20 +292,22 @@ def create_remote_action(
 
 
 @router.post("/computers/{computer_id}/remote-actions/{action_id}/cancel")
-def cancel_remote_action(
+async def cancel_remote_action(
     computer_id: int,
     action_id: int,
     request: Request,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     ensure_remote_action_role(current_user)
 
-    action = (
-        db.query(RemoteAction)
+    stmt = (
+        select(RemoteAction)
         .filter(RemoteAction.id == action_id, RemoteAction.computer_id == computer_id)
-        .first()
     )
+    result = await db.execute(stmt)
+    action = result.scalars().first()
+    
     if not action:
         raise HTTPException(status_code=404, detail="Acao remota nao encontrada")
 
@@ -315,7 +322,7 @@ def cancel_remote_action(
         + "."
     )
 
-    add_remote_action_event(
+    await add_remote_action_event(
         db=db,
         computer_id=computer_id,
         severity="warning",
@@ -323,8 +330,8 @@ def cancel_remote_action(
         message=f"{current_user.username} cancelou a acao {action.action_type} antes da execucao.",
     )
 
-    db.commit()
-    db.refresh(action)
+    await db.commit()
+    await db.refresh(action)
     return serialize_remote_action(action)
 
 

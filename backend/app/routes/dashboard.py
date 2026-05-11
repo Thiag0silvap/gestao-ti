@@ -1,7 +1,8 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
@@ -17,36 +18,59 @@ router = APIRouter()
 
 
 @router.get("/dashboard/summary")
-def dashboard_summary(
-    db: Session = Depends(get_db),
+async def dashboard_summary(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    total_computers = db.query(Computer).count()
-    total_assets = db.query(Asset).count()
+    # Total de computadores
+    result_total_comp = await db.execute(select(func.count()).select_from(Computer))
+    total_computers = result_total_comp.scalar()
+
+    # Total de ativos
+    result_total_assets = await db.execute(select(func.count()).select_from(Asset))
+    total_assets = result_total_assets.scalar()
 
     recent_limit = datetime.now() - OFFLINE_AFTER
 
-    online_recently = db.query(Computer).filter(
-        Computer.last_seen != None,
-        Computer.last_seen >= recent_limit
-    ).count()
+    # Online recentemente
+    result_online = await db.execute(
+        select(func.count()).select_from(Computer).filter(
+            Computer.last_seen != None,
+            Computer.last_seen >= recent_limit
+        )
+    )
+    online_recently = result_online.scalar()
 
-    offline_recently = db.query(Computer).filter(
-        (Computer.last_seen == None) | (Computer.last_seen < recent_limit)
-    ).count()
+    # Offline recentemente
+    result_offline = await db.execute(
+        select(func.count()).select_from(Computer).filter(
+            (Computer.last_seen == None) | (Computer.last_seen < recent_limit)
+        )
+    )
+    offline_recently = result_offline.scalar()
 
-    monitors = db.query(Asset).filter(Asset.asset_type == "Monitor").count()
-    nobreaks = db.query(Asset).filter(Asset.asset_type == "Nobreak").count()
-    stabilizers = db.query(Asset).filter(Asset.asset_type == "Estabilizador").count()
-    printers = db.query(ComputerPrinter).count()
+    # Contagem de ativos por tipo
+    result_monitors = await db.execute(select(func.count()).select_from(Asset).filter(Asset.asset_type == "Monitor"))
+    monitors = result_monitors.scalar()
+
+    result_nobreaks = await db.execute(select(func.count()).select_from(Asset).filter(Asset.asset_type == "Nobreak"))
+    nobreaks = result_nobreaks.scalar()
+
+    result_stabilizers = await db.execute(select(func.count()).select_from(Asset).filter(Asset.asset_type == "Estabilizador"))
+    stabilizers = result_stabilizers.scalar()
+
+    result_printers = await db.execute(select(func.count()).select_from(ComputerPrinter))
+    printers = result_printers.scalar()
+
+    # Métricas recentes (CPU, Memória, Disco)
+    # Nota: Em bases grandes, essa query pode ser otimizada.
+    result_metrics = await db.execute(
+        select(SystemMetric)
+        .order_by(SystemMetric.computer_id.asc(), SystemMetric.sampled_at.desc(), SystemMetric.id.desc())
+    )
+    metrics = result_metrics.scalars().all()
 
     latest_metrics = {}
-    metrics = (
-        db.query(SystemMetric)
-        .order_by(SystemMetric.computer_id.asc(), SystemMetric.sampled_at.desc(), SystemMetric.id.desc())
-        .all()
-    )
-
     for metric in metrics:
         latest_metrics.setdefault(metric.computer_id, metric)
 
@@ -85,7 +109,10 @@ def dashboard_summary(
     agent_without_telemetry = 0
     risky_hosts = []
 
-    computers = db.query(Computer).all()
+    # Processamento de computadores e severidade
+    result_computers = await db.execute(select(Computer))
+    computers = result_computers.scalars().all()
+    
     for computer in computers:
         severity = classify_computer_severity(computer)
         agent_queue_size = computer.agent_offline_queue_size or 0
@@ -127,13 +154,14 @@ def dashboard_summary(
     severity_order = {"critical": 0, "warning": 1, "offline": 2}
     risky_hosts.sort(key=lambda host: (severity_order.get(host["severity"], 9), host["hostname"]))
 
-    recent_events = (
-        db.query(OperationalEvent, Computer.hostname)
+    # Eventos recentes com Join
+    result_recent_events = await db.execute(
+        select(OperationalEvent, Computer.hostname)
         .join(Computer, Computer.id == OperationalEvent.computer_id)
         .order_by(OperationalEvent.created_at.desc(), OperationalEvent.id.desc())
         .limit(8)
-        .all()
     )
+    recent_events_rows = result_recent_events.all()
 
     return {
         "total_computers": total_computers,
@@ -166,7 +194,7 @@ def dashboard_summary(
                 "message": event.message,
                 "created_at": event.created_at,
             }
-            for event, hostname in recent_events
+            for event, hostname in recent_events_rows
         ],
         "monitors": monitors,
         "nobreaks": nobreaks,

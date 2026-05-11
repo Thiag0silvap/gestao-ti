@@ -1,8 +1,8 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
@@ -14,16 +14,20 @@ from app.schemas.ticket import TicketCreate, TicketUpdate
 router = APIRouter()
 
 
-def serialize_ticket(db: Session, ticket: Ticket):
-    requester = db.query(User).filter(User.id == ticket.requester_id).first()
+async def serialize_ticket(db: AsyncSession, ticket: Ticket):
+    result_req = await db.execute(select(User).filter(User.id == ticket.requester_id))
+    requester = result_req.scalars().first()
+    
     assigned_to = None
     computer = None
 
     if ticket.assigned_to_id:
-        assigned_to = db.query(User).filter(User.id == ticket.assigned_to_id).first()
+        result_ass = await db.execute(select(User).filter(User.id == ticket.assigned_to_id))
+        assigned_to = result_ass.scalars().first()
 
     if ticket.computer_id:
-        computer = db.query(Computer).filter(Computer.id == ticket.computer_id).first()
+        result_comp = await db.execute(select(Computer).filter(Computer.id == ticket.computer_id))
+        computer = result_comp.scalars().first()
 
     return {
         "id": ticket.id,
@@ -44,21 +48,23 @@ def serialize_ticket(db: Session, ticket: Ticket):
 
 
 @router.post("/tickets")
-def create_ticket(
+async def create_ticket(
     data: TicketCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     selected_computer_id = data.computer_id
 
     if selected_computer_id:
-        computer = db.query(Computer).filter(Computer.id == selected_computer_id).first()
+        result_comp = await db.execute(select(Computer).filter(Computer.id == selected_computer_id))
+        computer = result_comp.scalars().first()
         if not computer:
             raise HTTPException(status_code=404, detail="Computador não encontrado")
     else:
-        matched_computers = db.query(Computer).filter(
-            func.lower(Computer.user) == current_user.username.lower()
-        ).all()
+        result_matches = await db.execute(
+            select(Computer).filter(func.lower(Computer.user) == current_user.username.lower())
+        )
+        matched_computers = result_matches.scalars().all()
 
         if len(matched_computers) == 1:
             selected_computer_id = matched_computers[0].id
@@ -77,32 +83,36 @@ def create_ticket(
     )
 
     db.add(ticket)
-    db.commit()
-    db.refresh(ticket)
+    await db.commit()
+    await db.refresh(ticket)
 
-    return serialize_ticket(db, ticket)
+    return await serialize_ticket(db, ticket)
 
 
 @router.get("/tickets")
-def list_tickets(
-    db: Session = Depends(get_db),
+async def list_tickets(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     if current_user.role == "operator":
-        tickets = db.query(Ticket).filter(Ticket.requester_id == current_user.id).all()
+        stmt = select(Ticket).filter(Ticket.requester_id == current_user.id)
     else:
-        tickets = db.query(Ticket).all()
+        stmt = select(Ticket)
 
-    return [serialize_ticket(db, ticket) for ticket in tickets]
+    result = await db.execute(stmt)
+    tickets = result.scalars().all()
+
+    return [await serialize_ticket(db, ticket) for ticket in tickets]
 
 
 @router.get("/tickets/{ticket_id}")
-def get_ticket(
+async def get_ticket(
     ticket_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    result = await db.execute(select(Ticket).filter(Ticket.id == ticket_id))
+    ticket = result.scalars().first()
 
     if not ticket:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
@@ -110,17 +120,18 @@ def get_ticket(
     if current_user.role == "operator" and ticket.requester_id != current_user.id:
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    return serialize_ticket(db, ticket)
+    return await serialize_ticket(db, ticket)
 
 
 @router.put("/tickets/{ticket_id}")
-def update_ticket(
+async def update_ticket(
     ticket_id: int,
     data: TicketUpdate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    result = await db.execute(select(Ticket).filter(Ticket.id == ticket_id))
+    ticket = result.scalars().first()
 
     if not ticket:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
@@ -129,7 +140,8 @@ def update_ticket(
         raise HTTPException(status_code=403, detail="Acesso negado")
 
     if data.computer_id:
-        computer = db.query(Computer).filter(Computer.id == data.computer_id).first()
+        result_comp = await db.execute(select(Computer).filter(Computer.id == data.computer_id))
+        computer = result_comp.scalars().first()
         if not computer:
             raise HTTPException(status_code=404, detail="Computador não encontrado")
 
@@ -146,19 +158,20 @@ def update_ticket(
     elif data.status not in ["Resolvido", "Fechado"]:
         ticket.closed_at = None
 
-    db.commit()
-    db.refresh(ticket)
+    await db.commit()
+    await db.refresh(ticket)
 
-    return serialize_ticket(db, ticket)
+    return await serialize_ticket(db, ticket)
 
 
 @router.delete("/tickets/{ticket_id}")
-def delete_ticket(
+async def delete_ticket(
     ticket_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    result = await db.execute(select(Ticket).filter(Ticket.id == ticket_id))
+    ticket = result.scalars().first()
 
     if not ticket:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
@@ -166,7 +179,7 @@ def delete_ticket(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
-    db.delete(ticket)
-    db.commit()
+    await db.delete(ticket)
+    await db.commit()
 
     return {"message": "Chamado deletado com sucesso"}
