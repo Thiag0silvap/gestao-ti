@@ -6,3 +6,4 @@ from app.models.ticket import Ticket
 from app.models.system_metric import SystemMetric
 from app.models.operational_event import OperationalEvent
 from app.models.remote_action import RemoteAction
+from app.models.audit_log import AuditLog

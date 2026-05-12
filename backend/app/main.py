@@ -14,6 +14,9 @@ from app.routes import remote_actions
 from app.routes import tickets
 from app.core.logging import setup_logging
 from app.routes.agent import router
+from app.routes import audit
+from app.routes import monitoring
+from datetime import datetime
 
 # Inicializar logs profissionais
 setup_logging()
@@ -40,22 +43,28 @@ app.include_router(alerts.router)
 app.include_router(auth.router)
 app.include_router(remote_actions.router)
 app.include_router(tickets.router)
+app.include_router(audit.router)
+app.include_router(monitoring.router)
 app.include_router(router)
+
+from app.services.audit_service import log_action
+from app.database import AsyncSessionLocal
+
+@app.on_event("startup")
+async def startup_event():
+    # Registrar tempo de início para cálculo de uptime
+    app.state.start_time = datetime.now()
+    
+    async with AsyncSessionLocal() as db:
+        await log_action(
+            db, 
+            "SYSTEM_STARTUP", 
+            details={"version": "0.1.0"},
+            status="SUCCESS"
+        )
+        await db.commit()
+
 
 @app.get("/")
 def root():
     return {"message": "API Gestão de TI rodando com sucesso!"}
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/db-test")
-async def db_test():
-    async with engine.connect() as conn:
-        result = await conn.execute(text("SELECT 1 AS teste"))
-        row = result.fetchone()
-
-    return {"database": "ok", "resultado": row[0]}

@@ -46,6 +46,13 @@ const menu = [
     icon: "U",
     roles: ["admin"],
   },
+  {
+    name: "Auditoria",
+    path: "/audit",
+    description: "Logs do sistema",
+    icon: "L",
+    roles: ["admin"],
+  },
 ];
 
 function Sidebar({ isOpen, onClose }) {

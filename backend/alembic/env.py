@@ -18,7 +18,13 @@ import app.models  # Ensure all models are loaded
 config = context.config
 
 # Set the database URL from settings
-config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
+# Se for assíncrona (aioodbc ou aiosqlite), convertemos para síncrona para o Alembic
+sync_url = DATABASE_URL.replace("aioodbc", "pyodbc").replace("aiosqlite", "sqlite")
+# Ajuste específico para SQLite (remover o +sqlite se existir)
+if "sqlite" in sync_url and "+" in sync_url:
+    sync_url = "sqlite" + sync_url.split("+")[1]
+
+config.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

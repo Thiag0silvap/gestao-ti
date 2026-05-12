@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.models.computer import Computer
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.schemas.ticket import TicketCreate, TicketUpdate
+from app.services.audit_service import log_action
 
 router = APIRouter()
 
@@ -50,6 +51,7 @@ async def serialize_ticket(db: AsyncSession, ticket: Ticket):
 @router.post("/tickets")
 async def create_ticket(
     data: TicketCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -85,6 +87,17 @@ async def create_ticket(
     db.add(ticket)
     await db.commit()
     await db.refresh(ticket)
+
+    await log_action(
+        db,
+        "TICKET_CREATED",
+        user=current_user,
+        entity_type="TICKET",
+        entity_id=ticket.id,
+        request=request,
+        details={"title": ticket.title, "priority": ticket.priority}
+    )
+    await db.commit()
 
     return await serialize_ticket(db, ticket)
 
@@ -127,6 +140,7 @@ async def get_ticket(
 async def update_ticket(
     ticket_id: int,
     data: TicketUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -145,6 +159,11 @@ async def update_ticket(
         if not computer:
             raise HTTPException(status_code=404, detail="Computador não encontrado")
 
+    # Capturar valores antigos para auditoria
+    old_status = ticket.status
+    old_priority = ticket.priority
+    old_assigned_to = ticket.assigned_to_id
+
     ticket.title = data.title
     ticket.description = data.description
     ticket.status = data.status
@@ -161,12 +180,34 @@ async def update_ticket(
     await db.commit()
     await db.refresh(ticket)
 
+    # Registrar auditoria se houve mudanças relevantes
+    changes = {}
+    if old_status != ticket.status:
+        changes["status"] = {"old": old_status, "new": ticket.status}
+    if old_priority != ticket.priority:
+        changes["priority"] = {"old": old_priority, "new": ticket.priority}
+    if old_assigned_to != ticket.assigned_to_id:
+        changes["assigned_to_id"] = {"old": old_assigned_to, "new": ticket.assigned_to_id}
+
+    if changes:
+        await log_action(
+            db,
+            "TICKET_UPDATED",
+            user=current_user,
+            entity_type="TICKET",
+            entity_id=ticket.id,
+            request=request,
+            details=changes
+        )
+        await db.commit()
+
     return await serialize_ticket(db, ticket)
 
 
 @router.delete("/tickets/{ticket_id}")
 async def delete_ticket(
     ticket_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -179,6 +220,15 @@ async def delete_ticket(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Acesso negado")
 
+    await log_action(
+        db,
+        "TICKET_DELETED",
+        user=current_user,
+        entity_type="TICKET",
+        entity_id=ticket.id,
+        request=request,
+        details={"title": ticket.title}
+    )
     await db.delete(ticket)
     await db.commit()
 

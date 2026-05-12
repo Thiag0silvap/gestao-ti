@@ -12,6 +12,7 @@ import Layout from "./components/Layout";
 import ProtectedRoute from "./components/ProtectedRoute";
 import RoleProtectedRoute from "./components/RoleProtectedRoute";
 import Tickets from "./pages/Tickets";
+import AuditLogs from "./pages/AuditLogs";
 
 function App() {
   return (
@@ -104,6 +105,19 @@ function App() {
               <RoleProtectedRoute allowedRoles={["admin", "technician", "operator"]}>
                 <Layout>
                   <Tickets />
+                </Layout>
+              </RoleProtectedRoute>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/audit"
+          element={
+            <ProtectedRoute>
+              <RoleProtectedRoute allowedRoles={["admin"]}>
+                <Layout>
+                  <AuditLogs />
                 </Layout>
               </RoleProtectedRoute>
             </ProtectedRoute>

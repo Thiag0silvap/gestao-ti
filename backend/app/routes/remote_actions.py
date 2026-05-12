@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.services.audit_service import log_action
 from app.models.computer import Computer
 from app.models.operational_event import OperationalEvent
 from app.models.remote_action import RemoteAction
@@ -279,6 +280,22 @@ async def create_remote_action(
 
     await db.commit()
     await db.refresh(action)
+
+    await log_action(
+        db, 
+        "REMOTE_COMMAND_SENT", 
+        user=current_user, 
+        entity_type="COMPUTER", 
+        entity_id=computer_id, 
+        request=request,
+        details={
+            "action": normalized_action, 
+            "hostname": computer.hostname, 
+            "justification": justification
+        }
+    )
+    await db.commit()
+
     logger.warning(
         "Acao remota criada: id=%s computer_id=%s hostname=%s tipo=%s versao_alvo=%s requested_by=%s.",
         action.id,
@@ -332,6 +349,20 @@ async def cancel_remote_action(
 
     await db.commit()
     await db.refresh(action)
+
+    await log_action(
+        db, 
+        "REMOTE_COMMAND_CANCELLED", 
+        user=current_user, 
+        entity_type="COMPUTER", 
+        entity_id=computer_id, 
+        request=request,
+        details={
+            "action_id": action_id,
+            "action_type": action.action_type
+        }
+    )
+    await db.commit()
     return serialize_remote_action(action)
 
 

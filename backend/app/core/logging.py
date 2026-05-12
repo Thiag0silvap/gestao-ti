@@ -25,6 +25,7 @@ def setup_logging():
     # Silenciar logs muito barulhentos de bibliotecas de terceiros
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
     logging.getLogger("aioodbc").setLevel(logging.WARNING)
 
     # Personalizar o logger da aplicação

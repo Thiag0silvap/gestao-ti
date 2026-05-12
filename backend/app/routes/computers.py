@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.models.system_metric import SystemMetric
 from app.models.user import User
 from app.monitoring import classify_computer_severity
 from app.schemas.computer import ComputerCreate
+from app.services.audit_service import log_action
 
 router = APIRouter()
 
@@ -215,6 +216,7 @@ async def get_computer_events(
 async def update_computer(
     computer_id: int,
     data: ComputerCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -229,12 +231,24 @@ async def update_computer(
     await db.commit()
     await db.refresh(computer)
 
+    await log_action(
+        db,
+        "COMPUTER_UPDATED",
+        user=current_user,
+        entity_type="COMPUTER",
+        entity_id=computer.id,
+        request=request,
+        details={"hostname": computer.hostname, "sector": computer.sector}
+    )
+    await db.commit()
+
     return serialize_computer(computer)
 
 
 @router.delete("/computers/{computer_id}")
 async def delete_computer(
     computer_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -244,6 +258,15 @@ async def delete_computer(
     if not computer:
         raise HTTPException(status_code=404, detail="Computador não encontrado")
 
+    await log_action(
+        db,
+        "COMPUTER_DELETED",
+        user=current_user,
+        entity_type="COMPUTER",
+        entity_id=computer.id,
+        request=request,
+        details={"hostname": computer.hostname}
+    )
     await db.delete(computer)
     await db.commit()
 

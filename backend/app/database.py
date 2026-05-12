@@ -23,10 +23,16 @@ if not DATABASE_URL:
         DATABASE_URL = f"mssql+aioodbc:///?odbc_connect={quote_plus(connection_string)}"
 
 # Create async engine
-# echo=True mostra todas as queries SQL no terminal (útil para debug, mas poluído para uso diário)
+# pool_size: número de conexões mantidas abertas
+# max_overflow: conexões extras permitidas em picos de carga
 engine = create_async_engine(
     DATABASE_URL, 
-    echo=os.getenv("DB_ECHO", "false").lower() == "true"
+    echo=os.getenv("DB_ECHO", "false").lower() == "true",
+    pool_size=20,
+    max_overflow=10,
+    pool_timeout=10,
+    pool_recycle=3600,
+    pool_pre_ping=True
 )
 
 # Create async session factory
